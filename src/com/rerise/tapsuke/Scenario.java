@@ -23,8 +23,14 @@ public class Scenario {
     public static final int LONG = 1;
     public static final int SWIPE = 2;
     public static final int WAIT = 3;
+    public static final int IMAGE = 4;   // 画像を見つけたらタップ
+    public static final int UNTIL = 5;   // 画像が出るまで、操作をくり返す（または待つ）
 
-    public static final String[] TYPE_NAMES = {"タップ", "長押し", "スワイプ", "待機"};
+    // UNTIL のくり返し操作
+    public static final int ACT_NONE = 0, ACT_TAP = 1, ACT_SWIPE = 2;
+
+    public static final String[] TYPE_NAMES = {"タップ", "長押し", "スワイプ", "待機", "画像をタップ", "画像が出るまで"};
+    public static final String[] ACT_NAMES = {"待つだけ", "タップをくり返す", "スワイプをくり返す"};
 
     public static class Step {
         public int type = TAP;
@@ -33,11 +39,33 @@ public class Scenario {
         public int duration = 60; // 押している時間 / スワイプにかける時間（ms）
         public int after = 500;   // この操作のあとに待つ時間（ms）
         public List<float[]> path; // 記録したスワイプの軌跡（任意）
+        public int afterMax = 0;  // 0 より大きければ after〜afterMax の間でランダムに待つ
+
+        // 画像の手順（IMAGE / UNTIL）
+        public String tpl;        // お手本画像のID
+        public int timeoutSec = 30;   // この秒数見つからなければ…
+        public boolean skipOnTimeout; // true=次の手順へ / false=止める
+        public int threshold = 85;    // 一致の判定（%）
+        public int act = ACT_NONE;    // UNTIL でくり返す操作
+        public boolean tapFound;      // UNTIL で、見つけた画像もタップする
+
+        public boolean isImage() { return type == IMAGE || type == UNTIL; }
+
+        /** マーカー（画面上の位置）を持つか */
+        public boolean hasPoint() {
+            return type == TAP || type == LONG || type == SWIPE || (type == UNTIL && act != ACT_NONE);
+        }
+
+        public boolean isSwipeLike() {
+            return type == SWIPE || (type == UNTIL && act == ACT_SWIPE);
+        }
 
         public Step copy() {
             Step s = new Step();
             s.type = type; s.x = x; s.y = y; s.x2 = x2; s.y2 = y2;
-            s.duration = duration; s.after = after;
+            s.duration = duration; s.after = after; s.afterMax = afterMax;
+            s.tpl = tpl; s.timeoutSec = timeoutSec; s.skipOnTimeout = skipOnTimeout;
+            s.threshold = threshold; s.act = act; s.tapFound = tapFound;
             if (path != null) {
                 s.path = new ArrayList<>();
                 for (float[] p : path) s.path.add(new float[]{p[0], p[1]});
@@ -54,6 +82,11 @@ public class Scenario {
                 case SWIPE:
                     return "スワイプ (" + (int) x + ", " + (int) y + ") → (" + (int) x2 + ", " + (int) y2 + ") "
                             + duration + "ms" + (path != null && path.size() > 2 ? " 軌跡" : "");
+                case IMAGE:
+                    return "画像をタップ（最大" + timeoutSec + "秒待つ）";
+                case UNTIL:
+                    return "画像が出るまで" + ACT_NAMES[act] + (tapFound ? "→出たらタップ" : "")
+                            + "（最大" + timeoutSec + "秒）";
                 default:
                     return "待機";
             }
@@ -63,9 +96,18 @@ public class Scenario {
             JSONObject o = new JSONObject();
             o.put("type", type);
             o.put("x", x); o.put("y", y);
-            if (type == SWIPE) { o.put("x2", x2); o.put("y2", y2); }
+            o.put("x2", x2); o.put("y2", y2);
             o.put("duration", duration);
             o.put("after", after);
+            if (afterMax > 0) o.put("afterMax", afterMax);
+            if (isImage()) {
+                o.put("tpl", tpl == null ? "" : tpl);
+                o.put("timeoutSec", timeoutSec);
+                o.put("skipOnTimeout", skipOnTimeout);
+                o.put("threshold", threshold);
+                o.put("act", act);
+                o.put("tapFound", tapFound);
+            }
             if (path != null && path.size() > 2) {
                 JSONArray a = new JSONArray();
                 for (float[] p : path) { a.put((double) p[0]); a.put((double) p[1]); }
@@ -76,11 +118,19 @@ public class Scenario {
 
         static Step fromJson(JSONObject o) {
             Step s = new Step();
-            s.type = Math.max(0, Math.min(3, o.optInt("type", TAP)));
+            s.type = Math.max(0, Math.min(5, o.optInt("type", TAP)));
             s.x = (float) o.optDouble("x", 0); s.y = (float) o.optDouble("y", 0);
             s.x2 = (float) o.optDouble("x2", s.x); s.y2 = (float) o.optDouble("y2", s.y);
             s.duration = Math.max(1, o.optInt("duration", 60));
             s.after = Math.max(0, o.optInt("after", 500));
+            s.afterMax = Math.max(0, o.optInt("afterMax", 0));
+            String t = o.optString("tpl", "");
+            s.tpl = t.isEmpty() ? null : t.replaceAll("[^A-Za-z0-9_-]", "");
+            s.timeoutSec = Math.max(1, o.optInt("timeoutSec", 30));
+            s.skipOnTimeout = o.optBoolean("skipOnTimeout", false);
+            s.threshold = Math.max(50, Math.min(99, o.optInt("threshold", 85)));
+            s.act = Math.max(0, Math.min(2, o.optInt("act", ACT_NONE)));
+            s.tapFound = o.optBoolean("tapFound", false);
             JSONArray a = o.optJSONArray("path");
             if (a != null && a.length() >= 6) {
                 s.path = new ArrayList<>();
@@ -158,10 +208,10 @@ public class Scenario {
     }
 
     public String summary() {
-        int n = 0;
-        for (Step s : steps) if (s.type != WAIT) n++;
+        int n = 0, img = 0;
+        for (Step s : steps) { if (s.type != WAIT) n++; if (s.isImage()) img++; }
         String r = repeat == 0 ? "止めるまで" : repeat + "回";
-        return n + "操作・" + r + (maxMinutes > 0 ? "・最大" + maxMinutes + "分" : "")
+        return n + "手順" + (img > 0 ? "（画像" + img + "）" : "") + "・" + r + (maxMinutes > 0 ? "・最大" + maxMinutes + "分" : "")
                 + (jitterPx > 0 || jitterPct > 0 ? "・ランダム" : "");
     }
 

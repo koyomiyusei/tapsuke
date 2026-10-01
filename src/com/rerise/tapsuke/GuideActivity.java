@@ -81,7 +81,23 @@ public class GuideActivity extends Activity {
         vol.setChecked(App.prefs(this).getBoolean("vol_stop", true));
         vol.setOnCheckedChangeListener((btn, on) -> App.prefs(this).edit().putBoolean("vol_stop", on).apply());
         c4.addView(vol, Ui.mw(this, 6));
+        Switch upd = new Switch(this);
+        upd.setText("起動時に更新を自動確認する（オフにすると通信は「更新確認」を押したときだけ）");
+        upd.setTextColor(Ui.fg(this));
+        upd.setChecked(App.prefs(this).getBoolean("auto_update", true));
+        upd.setOnCheckedChangeListener((btn, on) -> App.prefs(this).edit().putBoolean("auto_update", on).apply());
+        c4.addView(upd, Ui.mw(this, 6));
         root.addView(Ui.cardView(this, c4), Ui.mw(this, 10));
+
+        LinearLayout cp = Ui.vbox(this);
+        cp.addView(Ui.text(this, "画面の扱い", 16, true));
+        cp.addView(Ui.subText(this,
+                "・画像の手順では画面を撮って、お手本と同じ部分があるかを数値で比べるだけです。文字を読んだり内容を判断したりはしません\n"
+                        + "・撮った画面は比べたらすぐ捨てます。保存も送信もしません\n"
+                        + "・お手本画像はこのアプリ専用の領域にだけ保存します（書き出しを選んだときだけファイルに含まれます）\n"
+                        + "・画面の文字や部品の情報は読み取らない設定です\n"
+                        + "・通信は更新確認（GitHubのバージョン情報を読む）だけです"), Ui.mw(this, 6));
+        root.addView(Ui.cardView(this, cp), Ui.mw(this, 10));
 
         // 使い方
         LinearLayout c5 = Ui.vbox(this);
@@ -92,6 +108,7 @@ public class GuideActivity extends Activity {
                         + "▶　実行（■で停止）\n"
                         + "＋　タップ位置を追加（マーカーをドラッグして合わせる）\n"
                         + "⇅　スワイプを追加（緑＝始点、赤＝終点）\n"
+                        + "◫　画面からお手本画像を登録（見つけたらタップ／出るまで待つ・タップ・スワイプをくり返す）\n"
                         + "●　記録。普通に操作すると、その操作が手順として残る（■で終了）\n"
                         + "◉　マーカーの表示・非表示\n"
                         + "✎　細かい編集（回数・時間・ランダム化・順番）\n"
@@ -100,7 +117,9 @@ public class GuideActivity extends Activity {
                         + "・Webページを読み進めるなら「⇅」を1つ置いて、そのあと待つ時間を1〜2秒に\n"
                         + "・タップ位置がパネルの下にあると、パネルを押してしまいます。パネルは端に寄せてください\n"
                         + "・ランダム化（位置±10px・間隔±20%くらい）を入れると機械的な動きが減ります\n"
-                        + "・画面の向きを変えると位置がずれます。作ったときと同じ向きで使ってください\n\n"
+                        + "・画面の向きを変えると位置がずれます。作ったときと同じ向きで使ってください\n"
+                        + "・画像が見つからないときは、一致の判定（%）を少し下げるか、お手本を撮り直してください\n"
+                        + "・画像の手順があるシナリオでは、実行中はマーカーを隠します（照合の邪魔をしないため）\n\n"
                         + "使えない場面\n"
                         + "・一部のアプリやゲームはユーザー補助によるタップを受け付けません\n"
                         + "・使う前に、そのアプリやサイトの利用規約を確認してください"),

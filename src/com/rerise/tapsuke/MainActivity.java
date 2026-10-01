@@ -77,6 +77,7 @@ public class MainActivity extends Activity {
         updateBtn = Ui.button(this, "更新確認", v -> Updater.updateNow(this));
         root.addView(updateBtn, Ui.mw(this, 24));
         root.addView(Ui.button(this, "使い方・設定", v -> startActivity(new Intent(this, GuideActivity.class))), Ui.mw(this, 4));
+        root.addView(Ui.button(this, "実行ログ（周回・停止の記録）", v -> showRunLog()), Ui.mw(this, 4));
         Button err = Ui.button(this, "最後のエラーを見る", v -> showError());
         root.addView(err, Ui.mw(this, 4));
     }
@@ -85,7 +86,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refresh();
-        Updater.autoCheck(this, this::markUpdate);
+        if (App.prefs(this).getBoolean("auto_update", true)) Updater.autoCheck(this, this::markUpdate);
     }
 
     private void markUpdate() {
@@ -153,7 +154,7 @@ public class MainActivity extends Activity {
     }
 
     private void menu(final Scenario s) {
-        String[] items = {"名前を変える", "複製", "書き出し（ファイル）", "削除"};
+        String[] items = {"名前を変える", "複製", "書き出し（ファイル・画像も含む）", "削除"};
         new AlertDialog.Builder(this).setTitle(s.name).setItems(items, (d, w) -> {
             if (w == 0) rename(s);
             else if (w == 1) { s.copyAsNew().save(this); refresh(); }
@@ -185,6 +186,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("削除", (d, w) -> {
                     if (TapService.isOn()) TapService.get().forget(s.id);
                     Scenario.delete(this, s.id);
+                    Templates.cleanup(this);
                     refresh();
                 }).show();
     }
@@ -217,13 +219,16 @@ public class MainActivity extends Activity {
                 Scenario s = Scenario.load(this, exportId);
                 if (s == null) return;
                 OutputStream out = getContentResolver().openOutputStream(uri, "wt");
-                out.write(s.toJson().toString(1).getBytes(StandardCharsets.UTF_8));
+                JSONObject o = s.toJson();
+                o.put("templates", Templates.export(this, s));
+                out.write(o.toString(1).getBytes(StandardCharsets.UTF_8));
                 out.close();
                 Toast.makeText(this, "書き出しました", Toast.LENGTH_SHORT).show();
             } else if (req == REQ_IMPORT) {
                 String txt = Scenario.readAll(getContentResolver().openInputStream(uri));
                 JSONObject o = new JSONObject(txt);
                 if (!o.has("steps")) throw new Exception("タップ助のシナリオではありません");
+                Templates.importAll(this, o.optJSONObject("templates"));
                 Scenario s = Scenario.fromJson(o);
                 if (Scenario.exists(this, s.id)) {
                     s.id = UUID.randomUUID().toString().substring(0, 8);
@@ -238,6 +243,19 @@ public class MainActivity extends Activity {
             new AlertDialog.Builder(this).setTitle("できませんでした")
                     .setMessage(e.getMessage()).setPositiveButton("OK", null).show();
         }
+    }
+
+    private void showRunLog() {
+        String e = App.prefs(this).getString("run_log", "");
+        TextView t = Ui.text(this, e.isEmpty() ? "まだ記録はありません" : e, 12, false);
+        t.setTextIsSelectable(true);
+        int p = Ui.dp(this, 16);
+        t.setPadding(p, p, p, p);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(t);
+        new AlertDialog.Builder(this).setTitle("実行ログ").setView(sv)
+                .setNegativeButton("消す", (d, w) -> App.prefs(this).edit().remove("run_log").apply())
+                .setPositiveButton("閉じる", null).show();
     }
 
     private void showError() {

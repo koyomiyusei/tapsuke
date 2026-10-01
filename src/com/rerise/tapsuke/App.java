@@ -28,6 +28,19 @@ public class App extends Application {
         return c.getSharedPreferences(PREF, Context.MODE_PRIVATE);
     }
 
+    /** 実行ログ（日時・周回数・手順番号・秒数などの数字だけ。画面の内容は残さない）。新しい順に最大200行 */
+    public static void runLog(Context c, String line) {
+        try {
+            String when = new SimpleDateFormat("MM/dd HH:mm:ss", Locale.JAPAN).format(new Date());
+            String old = prefs(c).getString("run_log", "");
+            String s = when + " " + line + (old.isEmpty() ? "" : "\n" + old);
+            String[] lines = s.split("\n");
+            if (lines.length > 200) s = String.join("\n", java.util.Arrays.copyOf(lines, 200));
+            prefs(c).edit().putString("run_log", s).apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 最後のエラーを1件だけ残す（メイン画面から見られる） */
     public static void log(Context c, Throwable e) {
         try {

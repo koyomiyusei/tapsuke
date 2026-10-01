@@ -1,0 +1,219 @@
+package com.rerise.tapsuke;
+
+import android.graphics.Bitmap;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * お手本画像が画面のどこにあるかを探す（正規化相互相関によるテンプレートマッチング）。
+ * 画素の明るさの並びを数値で比べるだけで、文字を読んだり内容を判断したりはしない。
+ * 速度のため、まず縮小した画面でおおまかに探し、候補の周りだけ細かく確かめる。
+ */
+public class Matcher {
+
+    /** 処理の基準は実画面の 1/2 */
+    static final int BASE = 2;
+    /** 粗い探索でお手本がこの画素数以下になるまで縮める */
+    static final int COARSE_AREA = 700;
+
+    public static class Gray {
+        final int w, h;
+        final float[] p;
+
+        Gray(int w, int h) { this.w = w; this.h = h; this.p = new float[w * h]; }
+    }
+
+    public static class Tpl {
+        int fullW, fullH;
+        Gray half, coarse;
+        int c;               // half → coarse の縮小率
+        float[] hz, cz;      // 平均を引いた値
+        double hn, cn;       // そのノルム
+        boolean flat;        // ほぼ単色（照合に向かない）
+    }
+
+    public static class Hit {
+        public float cx, cy;   // 実画面での中心
+        public int w, h;       // 実画面での大きさ
+        public float score;    // 0〜1
+    }
+
+    // ---------------- 前処理 ----------------
+
+    static Gray toGray(Bitmap b, int factor) {
+        int w = Math.max(1, b.getWidth() / factor), h = Math.max(1, b.getHeight() / factor);
+        Bitmap s = (factor == 1) ? b : Bitmap.createScaledBitmap(b, w, h, true);
+        int[] px = new int[w * h];
+        s.getPixels(px, 0, w, 0, 0, w, h);
+        if (s != b) s.recycle();
+        Gray g = new Gray(w, h);
+        for (int i = 0; i < px.length; i++) {
+            int c = px[i];
+            g.p[i] = 0.299f * ((c >> 16) & 255) + 0.587f * ((c >> 8) & 255) + 0.114f * (c & 255);
+        }
+        return g;
+    }
+
+    static Gray down(Gray g, int k) {
+        if (k == 1) return g;
+        int w = Math.max(1, g.w / k), h = Math.max(1, g.h / k);
+        Gray o = new Gray(w, h);
+        float inv = 1f / (k * k);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float s = 0;
+                for (int dy = 0; dy < k; dy++) {
+                    int row = (y * k + dy) * g.w + x * k;
+                    for (int dx = 0; dx < k; dx++) s += g.p[row + dx];
+                }
+                o.p[y * w + x] = s * inv;
+            }
+        return o;
+    }
+
+    private static double zeroMean(Gray g, float[] out) {
+        double m = 0;
+        for (float v : g.p) m += v;
+        m /= g.p.length;
+        double n = 0;
+        for (int i = 0; i < g.p.length; i++) {
+            out[i] = (float) (g.p[i] - m);
+            n += out[i] * out[i];
+        }
+        return Math.sqrt(n);
+    }
+
+    public static Tpl prepare(Bitmap full) {
+        Tpl t = new Tpl();
+        t.fullW = full.getWidth();
+        t.fullH = full.getHeight();
+        t.half = toGray(full, BASE);
+        int c = 1;
+        while (c < 16 && (t.half.w / c) * (t.half.h / c) > COARSE_AREA
+                && t.half.w / (c * 2) >= 6 && t.half.h / (c * 2) >= 6) c *= 2;
+        t.c = c;
+        t.coarse = down(t.half, c);
+        t.hz = new float[t.half.p.length];
+        t.hn = zeroMean(t.half, t.hz);
+        t.cz = new float[t.coarse.p.length];
+        t.cn = zeroMean(t.coarse, t.cz);
+        t.flat = t.hn / Math.sqrt(t.hz.length) < 3.0;
+        return t;
+    }
+
+    // ---------------- 照合 ----------------
+
+    /** 1枚の画面に対する前処理の使い回し */
+    public static class Frame {
+        final Gray half;
+        final Map<Integer, Gray> coarse = new HashMap<>();
+        final Map<Integer, double[][]> integ = new HashMap<>();
+        final int fullW, fullH;
+
+        public Frame(Bitmap screen) {
+            fullW = screen.getWidth();
+            fullH = screen.getHeight();
+            half = toGray(screen, BASE);
+        }
+
+        Gray at(int c) {
+            if (c == 1) return half;
+            Gray g = coarse.get(c);
+            if (g == null) { g = down(half, c); coarse.put(c, g); }
+            return g;
+        }
+
+        double[][] integral(int c) {
+            double[][] r = integ.get(c);
+            if (r != null) return r;
+            Gray g = at(c);
+            int W = g.w + 1;
+            double[] s = new double[W * (g.h + 1)], ss = new double[W * (g.h + 1)];
+            for (int y = 0; y < g.h; y++) {
+                double rs = 0, rss = 0;
+                for (int x = 0; x < g.w; x++) {
+                    double v = g.p[y * g.w + x];
+                    rs += v; rss += v * v;
+                    s[(y + 1) * W + x + 1] = s[y * W + x + 1] + rs;
+                    ss[(y + 1) * W + x + 1] = ss[y * W + x + 1] + rss;
+                }
+            }
+            r = new double[][]{s, ss};
+            integ.put(c, r);
+            return r;
+        }
+    }
+
+    /** (x,y) 位置での一致度 */
+    private static float ncc(Gray img, double[][] in, float[] tz, double tn, int tw, int th, int x, int y) {
+        int W = img.w + 1, n = tw * th;
+        double[] s = in[0], ss = in[1];
+        int a = y * W + x, b = y * W + x + tw, c = (y + th) * W + x, d = (y + th) * W + x + tw;
+        double sum = s[d] - s[b] - s[c] + s[a];
+        double sq = ss[d] - ss[b] - ss[c] + ss[a];
+        double var = sq - sum * sum / n;
+        if (var <= 1e-6 || tn <= 1e-6) return 0;
+        double dot = 0;
+        for (int j = 0; j < th; j++) {
+            int ir = (y + j) * img.w + x, tr = j * tw;
+            for (int i = 0; i < tw; i++) dot += img.p[ir + i] * tz[tr + i];
+        }
+        return (float) (dot / (Math.sqrt(var) * tn));
+    }
+
+    /** 画面からお手本を探す。見つからなくても一番近い場所と一致度を返す（判定は呼び出し側） */
+    public static Hit find(Frame f, Tpl t) {
+        if (t.half.w > f.half.w || t.half.h > f.half.h) return null;
+        Gray cg = f.at(t.c);
+        int tw = t.coarse.w, th = t.coarse.h;
+        if (tw > cg.w || th > cg.h) return null;
+        double[][] cin = f.integral(t.c);
+
+        // 粗い探索：上位3か所を拾う
+        int nx = cg.w - tw + 1, ny = cg.h - th + 1;
+        float[] sc = new float[nx * ny];
+        for (int y = 0; y < ny; y++)
+            for (int x = 0; x < nx; x++) sc[y * nx + x] = ncc(cg, cin, t.cz, t.cn, tw, th, x, y);
+
+        int[][] cand = new int[3][];
+        for (int k = 0; k < 3; k++) {
+            int bi = -1;
+            float bv = -2;
+            for (int i = 0; i < sc.length; i++) if (sc[i] > bv) { bv = sc[i]; bi = i; }
+            if (bi < 0 || bv <= -1) break;
+            int bx = bi % nx, by = bi / nx;
+            cand[k] = new int[]{bx, by};
+            int rx = Math.max(1, tw / 2), ry = Math.max(1, th / 2);
+            for (int y = Math.max(0, by - ry); y <= Math.min(ny - 1, by + ry); y++)
+                for (int x = Math.max(0, bx - rx); x <= Math.min(nx - 1, bx + rx); x++) sc[y * nx + x] = -2;
+        }
+
+        // 細かい確認（1/2 画面で候補の周りだけ）
+        Gray hg = f.half;
+        double[][] hin = f.integral(1);
+        int hw = t.half.w, hh = t.half.h;
+        int mx = hg.w - hw, my = hg.h - hh;
+        float best = -2;
+        int bx = 0, by = 0;
+        for (int[] cd : cand) {
+            if (cd == null) continue;
+            int r = t.c == 1 ? 0 : t.c + 1;
+            int x0 = Math.max(0, cd[0] * t.c - r), x1 = Math.min(mx, cd[0] * t.c + r);
+            int y0 = Math.max(0, cd[1] * t.c - r), y1 = Math.min(my, cd[1] * t.c + r);
+            for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++) {
+                    float v = ncc(hg, hin, t.hz, t.hn, hw, hh, x, y);
+                    if (v > best) { best = v; bx = x; by = y; }
+                }
+        }
+        if (best <= -2) return null;
+        Hit h = new Hit();
+        h.w = t.fullW;
+        h.h = t.fullH;
+        h.cx = bx * BASE + t.fullW / 2f;
+        h.cy = by * BASE + t.fullH / 2f;
+        h.score = Math.max(0, best);
+        return h;
+    }
+}
