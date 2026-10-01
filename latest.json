@@ -1,0 +1,6 @@
+{
+  "versionCode": 1,
+  "versionName": "1.0",
+  "apkUrl": "https://raw.githubusercontent.com/koyomiyusei/tapsuke/main/Tapsuke.apk",
+  "notes": "初版：浮かぶ操作パネル、タップ・長押し・スワイプ・待機、記録と再生、くり返し・自動停止、位置と間隔のランダム化、シナリオの保存・複製・書き出し・読み込み、設定ガイド、音量下キーで停止"
+}
