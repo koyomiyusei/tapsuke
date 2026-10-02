@@ -2,7 +2,6 @@ package com.rerise.tapsuke;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
-import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -22,7 +21,6 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
-import android.view.ContextThemeWrapper;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -216,19 +214,113 @@ public class TapService extends AccessibilityService {
         addSafe(panel, panelLp);
     }
 
-    private AlertDialog.Builder dialog() {
-        return new AlertDialog.Builder(new ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault_Dialog_Alert));
+    // ---- 画面の上に出す選択メニュー（ダイアログの代わり。どのアプリの上でも確実に出せる） ----
+
+    interface Pick { void pick(int which); }
+
+    private View menuView;
+
+    private void closeMenu() {
+        removeSafe(menuView);
+        menuView = null;
     }
 
-    private void showOverlay(AlertDialog d) {
-        try {
-            if (d.getWindow() != null) d.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY);
-            d.show();
-        } catch (Exception e) {
-            App.log(this, e);
-            busy = false;
-            restoreOverlays();
+    /** 選択肢を出す。外側をタップするか下のボタンで取り消し（onCancel） */
+    private void showMenu(String title, String[] items, final Pick onPick, final Runnable onCancel, String cancelLabel) {
+        showSheet(title, null, items, onPick, onCancel, cancelLabel);
+    }
+
+    private void showMessage(String title, String message) {
+        showSheet(title, message, new String[0], null, null, "OK");
+    }
+
+    private void showSheet(String title, String message, String[] items, final Pick onPick,
+                           final Runnable onCancel, String cancelLabel) {
+        closeMenu();
+        int[] sz = screenSize();
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.setBackgroundColor(0x99000000);
+        final Runnable cancel = () -> {
+            closeMenu();
+            try {
+                if (onCancel != null) onCancel.run();
+            } catch (Throwable e) {
+                App.log(TapService.this, e);
+            }
+        };
+        root.setOnClickListener(v -> cancel.run());
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(Ui.round(0xFF2B2D31, dp(18)));
+        card.setPadding(dp(6), dp(14), dp(6), dp(6));
+        card.setOnClickListener(v -> { });
+
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
+        t.setPadding(dp(16), 0, dp(16), dp(10));
+        card.addView(t);
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        if (message != null) {
+            TextView m = new TextView(this);
+            m.setText(message);
+            m.setTextColor(0xFFE6E6E6);
+            m.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            m.setLineSpacing(dp(3), 1f);
+            m.setPadding(dp(16), dp(4), dp(16), dp(12));
+            list.addView(m);
         }
+        for (int i = 0; i < items.length; i++) {
+            final int idx = i;
+            TextView it = new TextView(this);
+            it.setText(items[i]);
+            it.setTextColor(Color.WHITE);
+            it.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+            it.setPadding(dp(16), dp(14), dp(16), dp(14));
+            it.setBackground(Ui.round(0xFF3A3D42, dp(12)));
+            it.setOnClickListener(v -> {
+                closeMenu();
+                try {
+                    onPick.pick(idx);
+                } catch (Throwable e) {
+                    App.log(TapService.this, e);
+                    busy = false;
+                    closeCrop();
+                    restoreOverlays();
+                    toast("エラーが起きました。「最後のエラー」を確認してください");
+                }
+            });
+            LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            ip.setMargins(dp(8), dp(4), dp(8), dp(4));
+            list.addView(it, ip);
+        }
+        sv.addView(list);
+        card.addView(sv, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        TextView c = new TextView(this);
+        c.setText(cancelLabel);
+        c.setTextColor(0xFFFFD166);
+        c.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        c.setGravity(Gravity.CENTER);
+        c.setPadding(dp(16), dp(14), dp(16), dp(12));
+        c.setOnClickListener(v -> cancel.run());
+        card.addView(c);
+
+        android.widget.FrameLayout.LayoutParams cp = new android.widget.FrameLayout.LayoutParams(
+                Math.min(sz[0] - dp(40), dp(380)), android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        cp.topMargin = dp(70);
+        cp.bottomMargin = dp(70);
+        root.addView(card, cp);
+
+        menuView = root;
+        addSafe(root, overlayLp(sz[0], sz[1]));
     }
 
     private boolean rules() { return sc != null && sc.mode == Scenario.MODE_RULES; }
@@ -405,6 +497,7 @@ public class TapService extends AccessibilityService {
         if (playing) stopPlay(null);
         if (recording) stopRecord();
         closeCrop();
+        closeMenu();
         busy = false;
         commitMarkers();
         if (sc != null) sc.save(this);
@@ -974,20 +1067,16 @@ public class TapService extends AccessibilityService {
             final Scenario.Rule rule = new Scenario.Rule();
             rule.tpl = id;
             rule.name = "場面" + (sc.rules.size() + 1);
-            AlertDialog d = dialog().setTitle("この画面が見えたら、何をしますか？")
-                    .setItems(Scenario.R_NAMES, (di, which) -> {
-                        rule.act = which;
-                        if (rule.needsArea()) {
-                            askArea(rule, () -> { sc.rules.add(rule); endFlow(); toast("「" + rule.name + "」を追加しました"); });
-                        } else {
-                            sc.rules.add(rule);
-                            endFlow();
-                            toast("「" + rule.name + "」を追加しました");
-                        }
-                    })
-                    .setOnCancelListener(di -> cancelFlow())
-                    .create();
-            showOverlay(d);
+            showMenu("この画面が見えたら、何をしますか？", Scenario.R_NAMES, which -> {
+                rule.act = which;
+                if (rule.needsArea()) {
+                    askArea(rule, () -> { sc.rules.add(rule); endFlow(); toast("「" + rule.name + "」を追加しました"); });
+                } else {
+                    sc.rules.add(rule);
+                    endFlow();
+                    toast("「" + rule.name + "」を追加しました");
+                }
+            }, this::cancelFlow, "やめる");
         });
     }
 
@@ -998,11 +1087,8 @@ public class TapService extends AccessibilityService {
             rule.al = r.left; rule.at = r.top; rule.ar = r.right; rule.ab = r.bottom;
             hideCropUi();
             if (rule.act == Scenario.R_SWIPE_AREA) {
-                AlertDialog d = dialog().setTitle("スワイプの向き")
-                        .setItems(Scenario.DIR_NAMES, (di, which) -> { rule.dir = which; done.run(); })
-                        .setOnCancelListener(di -> { rule.dir = 0; done.run(); })
-                        .create();
-                showOverlay(d);
+                showMenu("スワイプの向き", Scenario.DIR_NAMES, which -> { rule.dir = which; done.run(); },
+                        () -> { rule.dir = 0; done.run(); }, "おまかせ（ランダム）");
             } else {
                 done.run();
             }
@@ -1016,11 +1102,8 @@ public class TapService extends AccessibilityService {
             rule.al = r.left; rule.at = r.top; rule.ar = r.right; rule.ab = r.bottom;
             hideCropUi();
             if (rule.act == Scenario.R_SWIPE_AREA) {
-                AlertDialog d = dialog().setTitle("スワイプの向き")
-                        .setItems(Scenario.DIR_NAMES, (di, which) -> { rule.dir = which; endFlow(); })
-                        .setOnCancelListener(di -> endFlow())
-                        .create();
-                showOverlay(d);
+                showMenu("スワイプの向き", Scenario.DIR_NAMES, which -> { rule.dir = which; endFlow(); },
+                        this::endFlow, "そのまま");
             } else {
                 endFlow();
             }
@@ -1038,15 +1121,11 @@ public class TapService extends AccessibilityService {
         }
         items[n] = "どの場面でもないとき\n　→ " + sc.other.actLabel();
         items[n + 1] = "くわしい設定を開く（回数・時間・判定など）";
-        AlertDialog d = dialog().setTitle("場面の一覧（上にあるものを優先）")
-                .setItems(items, (di, which) -> {
-                    if (which < n) sceneMenu(which);
-                    else if (which == n) otherMenu();
-                    else openEditor();
-                })
-                .setNegativeButton("閉じる", null)
-                .create();
-        showOverlay(d);
+        showMenu("場面の一覧（上にあるものを優先）", items, which -> {
+            if (which < n) sceneMenu(which);
+            else if (which == n) otherMenu();
+            else openEditor();
+        }, null, "閉じる");
     }
 
     private void sceneMenu(final int i) {
@@ -1058,8 +1137,7 @@ public class TapService extends AccessibilityService {
         items.add("優先を上げる（上へ）");
         items.add("優先を下げる（下へ）");
         items.add("この場面を削除");
-        AlertDialog d = dialog().setTitle((i + 1) + ". " + r.name)
-                .setItems(items.toArray(new String[0]), (di, which) -> {
+        showMenu((i + 1) + ". " + r.name, items.toArray(new String[0]), which -> {
                     String s = items.get(which);
                     if (s.startsWith("やること")) changeAction(r, false);
                     else if (s.startsWith("目印")) addSceneFlow(i);
@@ -1067,10 +1145,7 @@ public class TapService extends AccessibilityService {
                     else if (s.startsWith("優先を上げる")) { if (i > 0) { sc.rules.remove(i); sc.rules.add(i - 1, r); } saveAndRefresh(); sceneListDialog(); }
                     else if (s.startsWith("優先を下げる")) { if (i < sc.rules.size() - 1) { sc.rules.remove(i); sc.rules.add(i + 1, r); } saveAndRefresh(); sceneListDialog(); }
                     else { sc.rules.remove(i); saveAndRefresh(); Templates.cleanup(this); sceneListDialog(); }
-                })
-                .setNegativeButton("戻る", (di, w) -> sceneListDialog())
-                .create();
-        showOverlay(d);
+        }, this::sceneListDialog, "戻る");
     }
 
     private void otherMenu() {
@@ -1088,15 +1163,11 @@ public class TapService extends AccessibilityService {
             names = Scenario.R_NAMES;
             acts = new int[]{0, 1, 2, 3, 4};
         }
-        AlertDialog d = dialog().setTitle(isOther ? "どの場面でもないとき（クエスト中など）" : "この画面が見えたら、何をしますか？")
-                .setItems(names, (di, which) -> {
-                    r.act = acts[which];
-                    if (r.needsArea()) retakeArea(r);
-                    else saveAndRefresh();
-                })
-                .setNegativeButton("戻る", (di, w) -> sceneListDialog())
-                .create();
-        showOverlay(d);
+        showMenu(isOther ? "どの場面でもないとき（クエスト中など）" : "この画面が見えたら、何をしますか？", names, which -> {
+            r.act = acts[which];
+            if (r.needsArea()) retakeArea(r);
+            else saveAndRefresh();
+        }, this::sceneListDialog, "戻る");
     }
 
     private void saveAndRefresh() {
@@ -1144,9 +1215,7 @@ public class TapService extends AccessibilityService {
             h.post(() -> {
                 busy = false;
                 restoreOverlays();
-                AlertDialog d = dialog().setTitle("いまの画面の判定").setMessage(sb.toString())
-                        .setPositiveButton("OK", null).create();
-                showOverlay(d);
+                showMessage("いまの画面の判定", sb.toString());
             });
         }, 0), 350);
     }
@@ -1160,11 +1229,7 @@ public class TapService extends AccessibilityService {
             final float cx = r.exactCenterX(), cy = r.exactCenterY();
             hideCropUi();
             String[] items = {"見つけたらタップ", "出るまで待つ", "出るまでタップをくり返す", "出るまでスワイプをくり返す"};
-            AlertDialog d = dialog().setTitle("この画像で何をしますか？")
-                    .setItems(items, (di, which) -> addImageStep(id, which, cx, cy))
-                    .setOnCancelListener(di -> cancelFlow())
-                    .create();
-            showOverlay(d);
+            showMenu("この画像で何をしますか？", items, which -> addImageStep(id, which, cx, cy), this::cancelFlow, "やめる");
         });
     }
 
@@ -1244,6 +1309,7 @@ public class TapService extends AccessibilityService {
         playStart = SystemClock.uptimeMillis();
         btnPlay.setText("■");
         btnPlay.setTextColor(0xFFFFD166);
+        for (View v : extraButtons) v.setVisibility(View.GONE); // 実行中は小さくして、画面の邪魔をしない
         applyMarkerState();
         setStatus("開始します");
         App.runLog(this, "開始「" + sc.name + "」");
@@ -1273,6 +1339,7 @@ public class TapService extends AccessibilityService {
             btnPlay.setText("▶");
             btnPlay.setTextColor(Color.WHITE);
         }
+        if (extraButtons != null) for (View v : extraButtons) v.setVisibility(collapsed ? View.GONE : View.VISIBLE);
         applyMarkerState();
         String done = loopCount + "周・" + elapsed();
         setStatus(sc == null ? "" : done + "で停止");

@@ -24,13 +24,31 @@ public class Matcher {
         Gray(int w, int h) { this.w = w; this.h = h; this.p = new float[w * h]; }
     }
 
+    /** お手本の、ある縮小率での姿 */
+    static class Level {
+        Gray g;
+        float[] z;   // 平均を引いた値
+        double n;    // そのノルム
+    }
+
     public static class Tpl {
         int fullW, fullH;
-        Gray half, coarse;
-        int c;               // half → coarse の縮小率
-        float[] hz, cz;      // 平均を引いた値
-        double hn, cn;       // そのノルム
+        Gray half;
+        int c;               // 粗い探索での縮小率（half に対して）
         boolean flat;        // ほぼ単色（照合に向かない）
+        private final Map<Integer, Level> levels = new HashMap<>();
+
+        synchronized Level level(int k) {
+            Level l = levels.get(k);
+            if (l == null) {
+                l = new Level();
+                l.g = down(half, k);
+                l.z = new float[l.g.p.length];
+                l.n = zeroMean(l.g, l.z);
+                levels.put(k, l);
+            }
+            return l;
+        }
     }
 
     public static class Hit {
@@ -92,13 +110,11 @@ public class Matcher {
         int c = 1;
         while (c < 16 && (t.half.w / c) * (t.half.h / c) > COARSE_AREA
                 && t.half.w / (c * 2) >= 6 && t.half.h / (c * 2) >= 6) c *= 2;
+        if (c == 1 && Math.min(t.half.w, t.half.h) >= 12) c = 2;
         t.c = c;
-        t.coarse = down(t.half, c);
-        t.hz = new float[t.half.p.length];
-        t.hn = zeroMean(t.half, t.hz);
-        t.cz = new float[t.coarse.p.length];
-        t.cn = zeroMean(t.coarse, t.cz);
-        t.flat = t.hn / Math.sqrt(t.hz.length) < 3.0;
+        Level l1 = t.level(1);
+        t.level(c);
+        t.flat = l1.n / Math.sqrt(l1.z.length) < 3.0;
         return t;
     }
 
@@ -145,7 +161,7 @@ public class Matcher {
         }
     }
 
-    /** (x,y) 位置での一致度 */
+    /** (x,y) 位置での一致度（積分画像を使う。粗い探索用） */
     private static float ncc(Gray img, double[][] in, float[] tz, double tn, int tw, int th, int x, int y) {
         int W = img.w + 1, n = tw * th;
         double[] s = in[0], ss = in[1];
@@ -162,11 +178,30 @@ public class Matcher {
         return (float) (dot / (Math.sqrt(var) * tn));
     }
 
+    /** (x,y) 位置での一致度（その場で計算。候補の周りを少しだけ確かめる用） */
+    private static float nccDirect(Gray img, Level l, int x, int y) {
+        int tw = l.g.w, th = l.g.h, n = tw * th;
+        double sum = 0, sq = 0, dot = 0;
+        for (int j = 0; j < th; j++) {
+            int ir = (y + j) * img.w + x, tr = j * tw;
+            for (int i = 0; i < tw; i++) {
+                float v = img.p[ir + i];
+                sum += v;
+                sq += v * v;
+                dot += v * l.z[tr + i];
+            }
+        }
+        double var = sq - sum * sum / n;
+        if (var <= 1e-6 || l.n <= 1e-6) return 0;
+        return (float) (dot / (Math.sqrt(var) * l.n));
+    }
+
     /** 画面からお手本を探す。見つからなくても一番近い場所と一致度を返す（判定は呼び出し側） */
     public static Hit find(Frame f, Tpl t) {
         if (t.half.w > f.half.w || t.half.h > f.half.h) return null;
+        Level cl = t.level(t.c);
         Gray cg = f.at(t.c);
-        int tw = t.coarse.w, th = t.coarse.h;
+        int tw = cl.g.w, th = cl.g.h;
         if (tw > cg.w || th > cg.h) return null;
         double[][] cin = f.integral(t.c);
 
@@ -174,7 +209,7 @@ public class Matcher {
         int nx = cg.w - tw + 1, ny = cg.h - th + 1;
         float[] sc = new float[nx * ny];
         for (int y = 0; y < ny; y++)
-            for (int x = 0; x < nx; x++) sc[y * nx + x] = ncc(cg, cin, t.cz, t.cn, tw, th, x, y);
+            for (int x = 0; x < nx; x++) sc[y * nx + x] = ncc(cg, cin, cl.z, cl.n, tw, th, x, y);
 
         int[][] cand = new int[3][];
         for (int k = 0; k < 3; k++) {
@@ -189,23 +224,28 @@ public class Matcher {
                 for (int x = Math.max(0, bx - rx); x <= Math.min(nx - 1, bx + rx); x++) sc[y * nx + x] = -2;
         }
 
-        // 細かい確認（1/2 画面で候補の周りだけ）
-        Gray hg = f.half;
-        double[][] hin = f.integral(1);
-        int hw = t.half.w, hh = t.half.h;
-        int mx = hg.w - hw, my = hg.h - hh;
+        // 段階的に細かくして確かめる（各段で候補の周り ±2 だけ）
         float best = -2;
         int bx = 0, by = 0;
         for (int[] cd : cand) {
             if (cd == null) continue;
-            int r = t.c == 1 ? 0 : t.c + 1;
-            int x0 = Math.max(0, cd[0] * t.c - r), x1 = Math.min(mx, cd[0] * t.c + r);
-            int y0 = Math.max(0, cd[1] * t.c - r), y1 = Math.min(my, cd[1] * t.c + r);
-            for (int y = y0; y <= y1; y++)
-                for (int x = x0; x <= x1; x++) {
-                    float v = ncc(hg, hin, t.hz, t.hn, hw, hh, x, y);
-                    if (v > best) { best = v; bx = x; by = y; }
-                }
+            int px = cd[0], py = cd[1];
+            float v = -2;
+            if (t.c == 1) v = nccDirect(f.half, t.level(1), px, py);
+            for (int k = t.c / 2; k >= 1; k /= 2) {
+                Level l = t.level(k);
+                Gray g = f.at(k);
+                int mx = g.w - l.g.w, my = g.h - l.g.h;
+                if (mx < 0 || my < 0) { v = -2; break; }
+                int cx = px * 2, cy = py * 2;
+                v = -2;
+                for (int y = Math.max(0, cy - 2); y <= Math.min(my, cy + 3); y++)
+                    for (int x = Math.max(0, cx - 2); x <= Math.min(mx, cx + 3); x++) {
+                        float s2 = nccDirect(g, l, x, y);
+                        if (s2 > v) { v = s2; px = x; py = y; }
+                    }
+            }
+            if (v > best) { best = v; bx = px; by = py; }
         }
         if (best <= -2) return null;
         Hit h = new Hit();
