@@ -74,8 +74,7 @@ public class Templates {
     /** どのシナリオからも使われていない画像を消す */
     public static void cleanup(Context c) {
         Set<String> used = new HashSet<>();
-        for (Scenario s : Scenario.all(c))
-            for (Scenario.Step st : s.steps) if (st.tpl != null) used.add(st.tpl);
+        for (Scenario s : Scenario.all(c)) used.addAll(s.templateIds());
         File[] fs = dir(c).listFiles();
         if (fs == null) return;
         for (File f : fs) {
@@ -91,10 +90,10 @@ public class Templates {
 
     public static JSONObject export(Context c, Scenario s) throws Exception {
         JSONObject o = new JSONObject();
-        for (Scenario.Step st : s.steps) {
-            if (st.tpl == null || o.has(st.tpl) || !exists(c, st.tpl)) continue;
-            byte[] bytes = java.nio.file.Files.readAllBytes(file(c, st.tpl).toPath());
-            o.put(st.tpl, Base64.encodeToString(bytes, Base64.NO_WRAP));
+        for (String id : s.templateIds()) {
+            if (!exists(c, id)) continue;
+            byte[] bytes = java.nio.file.Files.readAllBytes(file(c, id).toPath());
+            o.put(id, Base64.encodeToString(bytes, Base64.NO_WRAP));
         }
         return o;
     }

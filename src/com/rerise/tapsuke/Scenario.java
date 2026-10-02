@@ -141,6 +141,85 @@ public class Scenario {
         }
     }
 
+    // ---------------- 場面モード（この画面が見えたら、これをする） ----------------
+
+    public static final int MODE_SEQ = 0, MODE_RULES = 1;
+    public static final int R_TAP_IMAGE = 0, R_TAP_AREA = 1, R_SWIPE_AREA = 2, R_WAIT = 3, R_STOP = 4;
+    public static final String[] R_NAMES = {"その画像の中をタップ", "決めた範囲の中をタップ", "決めた範囲の中をスワイプ",
+            "何もしない（待つ）", "実行を止める"};
+    public static final String[] DIR_NAMES = {"向きはランダム", "上へ", "下へ", "左へ", "右へ"};
+    public static final int[] LEVELS = {70, 82, 92};
+    public static final String[] LEVEL_NAMES = {"ゆるめ（少し違っても同じとみなす）", "ふつう", "きびしめ（ほぼ同じときだけ）"};
+
+    public static class Rule {
+        public String name = "";
+        public String tpl;            // 目印の画像（「どの場面でもないとき」は null）
+        public int act = R_TAP_IMAGE;
+        public int al, at, ar, ab;    // 操作する範囲（画面の座標）
+        public int dir = 0;           // スワイプの向き
+        public int threshold = 82;    // 一致の判定（%）
+        public int waitMin = 800, waitMax = 1500; // 操作のあと待つ時間（ms）この間でランダム
+        public boolean countLoop;     // この場面が出るたびに「1周」と数える
+
+        public boolean hasArea() { return ar - al > 4 && ab - at > 4; }
+
+        public boolean needsArea() { return act == R_TAP_AREA || act == R_SWIPE_AREA; }
+
+        public String actLabel() {
+            String a = R_NAMES[act];
+            if (act == R_SWIPE_AREA) a += "（" + DIR_NAMES[dir] + "）";
+            if (needsArea() && !hasArea()) a += " ※範囲が未設定";
+            return a;
+        }
+
+        public String levelLabel() {
+            for (int i = 0; i < LEVELS.length; i++) if (threshold == LEVELS[i]) return LEVEL_NAMES[i].replaceAll("（.*", "");
+            return threshold + "%";
+        }
+
+        JSONObject toJson() throws Exception {
+            JSONObject o = new JSONObject();
+            o.put("name", name);
+            o.put("tpl", tpl == null ? "" : tpl);
+            o.put("act", act);
+            o.put("al", al); o.put("at", at); o.put("ar", ar); o.put("ab", ab);
+            o.put("dir", dir);
+            o.put("threshold", threshold);
+            o.put("waitMin", waitMin); o.put("waitMax", waitMax);
+            o.put("countLoop", countLoop);
+            return o;
+        }
+
+        static Rule fromJson(JSONObject o) {
+            Rule r = new Rule();
+            r.name = o.optString("name", "");
+            String t = o.optString("tpl", "");
+            r.tpl = t.isEmpty() ? null : t.replaceAll("[^A-Za-z0-9_-]", "");
+            r.act = Math.max(0, Math.min(4, o.optInt("act", R_TAP_IMAGE)));
+            r.al = o.optInt("al"); r.at = o.optInt("at"); r.ar = o.optInt("ar"); r.ab = o.optInt("ab");
+            r.dir = Math.max(0, Math.min(4, o.optInt("dir", 0)));
+            r.threshold = Math.max(50, Math.min(99, o.optInt("threshold", 82)));
+            r.waitMin = Math.max(0, o.optInt("waitMin", 800));
+            r.waitMax = Math.max(r.waitMin, o.optInt("waitMax", 1500));
+            r.countLoop = o.optBoolean("countLoop", false);
+            return r;
+        }
+    }
+
+    public int mode = MODE_SEQ;
+    public List<Rule> rules = new ArrayList<>();
+    public Rule other = newOther();   // どの場面でもないときの操作
+    public int stuckSec = 0;          // どの場面も見つからない状態がこの秒数続いたら止める（0=止めない）
+
+    private static Rule newOther() {
+        Rule r = new Rule();
+        r.name = "どの場面でもないとき";
+        r.act = R_WAIT;
+        r.waitMin = 400;
+        r.waitMax = 800;
+        return r;
+    }
+
     public String id = UUID.randomUUID().toString().substring(0, 8);
     public String name = "新しいシナリオ";
     public List<Step> steps = new ArrayList<>();
@@ -171,6 +250,12 @@ public class Scenario {
         JSONArray a = new JSONArray();
         for (Step s : steps) a.put(s.toJson());
         o.put("steps", a);
+        o.put("mode", mode);
+        JSONArray ra = new JSONArray();
+        for (Rule r : rules) ra.put(r.toJson());
+        o.put("rules", ra);
+        o.put("other", other.toJson());
+        o.put("stuckSec", stuckSec);
         return o;
     }
 
@@ -193,7 +278,29 @@ public class Scenario {
             JSONObject so = a.optJSONObject(i);
             if (so != null) sc.steps.add(Step.fromJson(so));
         }
+        sc.mode = o.optInt("mode", MODE_SEQ) == MODE_RULES ? MODE_RULES : MODE_SEQ;
+        JSONArray ra = o.optJSONArray("rules");
+        if (ra != null) for (int i = 0; i < ra.length(); i++) {
+            JSONObject ro = ra.optJSONObject(i);
+            if (ro != null) sc.rules.add(Rule.fromJson(ro));
+        }
+        JSONObject oo = o.optJSONObject("other");
+        if (oo != null) {
+            sc.other = Rule.fromJson(oo);
+            sc.other.tpl = null;
+            if (sc.other.act == R_TAP_IMAGE) sc.other.act = R_WAIT;
+            sc.other.name = "どの場面でもないとき";
+        }
+        sc.stuckSec = Math.max(0, o.optInt("stuckSec", 0));
         return sc;
+    }
+
+    /** このシナリオが使っているお手本画像のID */
+    public java.util.Set<String> templateIds() {
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (Step st : steps) if (st.tpl != null) ids.add(st.tpl);
+        for (Rule r : rules) if (r.tpl != null) ids.add(r.tpl);
+        return ids;
     }
 
     public Scenario copyAsNew() {
@@ -208,6 +315,14 @@ public class Scenario {
     }
 
     public String summary() {
+        if (mode == MODE_RULES) {
+            String r = repeat == 0 ? "止めるまで" : repeat + "周";
+            return "場面" + rules.size() + "個・" + r + (maxMinutes > 0 ? "・最大" + maxMinutes + "分" : "");
+        }
+        return seqSummary();
+    }
+
+    private String seqSummary() {
         int n = 0, img = 0;
         for (Step s : steps) { if (s.type != WAIT) n++; if (s.isImage()) img++; }
         String r = repeat == 0 ? "止めるまで" : repeat + "回";

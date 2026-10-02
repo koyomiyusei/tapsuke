@@ -119,19 +119,31 @@ public class MainActivity extends Activity {
     private View scenarioCard(final Scenario s, boolean open) {
         LinearLayout box = Ui.vbox(this);
         TextView name = Ui.text(this, (open ? "▶ " : "") + s.name, 16, true);
-        box.addView(name);
+        box.addView(Ui.subText(this, s.mode == Scenario.MODE_RULES ? "画面を見て動く型" : "決まった順番の型"));
+        box.addView(name, 0);
         box.addView(Ui.subText(this, s.summary()));
         LinearLayout row = Ui.hbox(this);
         Button use = Ui.primary(this, open ? "パネル表示中" : "パネルで使う", v -> openPanel(s.id));
         row.addView(use, Ui.weight(1.4f));
-        row.addView(Ui.button(this, "編集", v -> startActivity(new Intent(this, EditActivity.class).putExtra("id", s.id))), Ui.weight(1));
+        row.addView(Ui.button(this, "設定", v -> startActivity(new Intent(this,
+                s.mode == Scenario.MODE_RULES ? RulesActivity.class : EditActivity.class).putExtra("id", s.id))), Ui.weight(1));
         row.addView(Ui.button(this, "…", v -> menu(s)), Ui.weight(0.6f));
         box.addView(row, Ui.mw(this, 8));
         return Ui.cardView(this, box);
     }
 
     private void newScenario() {
+        String[] items = {
+                "画面を見て動く（おすすめ）\n　「この画面が見えたら、これをする」を登録する。テスト・周回向き",
+                "決まった順番で動く\n　タップやスワイプを上から順に行う。単純なくり返し向き"};
+        new AlertDialog.Builder(this).setTitle("どちらの型で作りますか？")
+                .setItems(items, (d, w) -> createScenario(w == 0 ? Scenario.MODE_RULES : Scenario.MODE_SEQ))
+                .show();
+    }
+
+    private void createScenario(int mode) {
         Scenario s = new Scenario();
+        s.mode = mode;
         s.name = "シナリオ" + (Scenario.all(this).size() + 1);
         android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
         getWindowManager().getDefaultDisplay().getRealMetrics(dm);
