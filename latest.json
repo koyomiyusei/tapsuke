@@ -1,6 +1,6 @@
 {
-  "versionCode": 5,
-  "versionName": "1.4",
+  "versionCode": 6,
+  "versionName": "1.5",
   "apkUrl": "https://raw.githubusercontent.com/koyomiyusei/tapsuke/main/Tapsuke.apk",
-  "notes": "場面一覧を作り直し：≡をドラッグして順番を変更、各行から編集・削除。パネルのボタン名を「場面一覧」「枠表示」に変更"
+  "notes": "場面一覧：行を長押し（または≡）で掴んでドラッグ＆ドロップで並べ替え、各行から編集・削除。押す位置・スワイプ・待ち時間のランダムの中身と判定のゆるさを一覧に表示。パネルのボタン名を「場面一覧」「枠表示」に変更"
 }

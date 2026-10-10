@@ -1132,7 +1132,7 @@ public class TapService extends AccessibilityService {
         card.setOnClickListener(v -> { });
 
         card.addView(sheetText("場面の一覧（上にあるほど優先）", 17, Color.WHITE, true, dp(12), 0));
-        card.addView(sheetText("左の ≡ を上下にドラッグすると順番を変えられます", 12, 0xFFBDBDBD, false, dp(12), dp(8)));
+        card.addView(sheetText("行を長押し（または左の ≡ を押して）掴み、置きたい場所まで動かして離すと順番が変わります", 12, 0xFFBDBDBD, false, dp(12), dp(8)));
 
         final android.widget.ScrollView sv = new android.widget.ScrollView(this);
         final LinearLayout list = new LinearLayout(this);
@@ -1154,7 +1154,8 @@ public class TapService extends AccessibilityService {
         LinearLayout ot = new LinearLayout(this);
         ot.setOrientation(LinearLayout.VERTICAL);
         ot.addView(sheetText("どの場面でもないとき（いつも最後）", 14, Color.WHITE, true, 0, 0));
-        ot.addView(sheetText("→ " + sc.other.actLabel(), 12, 0xFFBDBDBD, false, 0, 0));
+        ot.addView(sheetText("→ " + sc.other.actLabel(), 12, 0xFFE0E0E0, false, 0, 0));
+        ot.addView(sheetText(sc.other.randomLabel(), 11, 0xFF9FB4D0, false, 0, 0));
         other.addView(ot, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         other.addView(smallBtn("編集", v -> { closeMenu(); otherMenu(); }));
         LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -1243,7 +1244,8 @@ public class TapService extends AccessibilityService {
         txt.setOrientation(LinearLayout.VERTICAL);
         final TextView name = sheetText((index + 1) + ". " + r.name, 14, Color.WHITE, true, 0, 0);
         txt.addView(name);
-        txt.addView(sheetText("→ " + r.actLabel() + (r.countLoop ? "・1周" : ""), 12, 0xFFBDBDBD, false, 0, 0));
+        txt.addView(sheetText("→ " + r.actLabel() + (r.countLoop ? "・1周と数える" : ""), 12, 0xFFE0E0E0, false, 0, 0));
+        txt.addView(sheetText(r.randomLabel() + "\n判定：" + r.levelLabel(), 11, 0xFF9FB4D0, false, 0, 0));
         row.addView(txt, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         row.addView(smallBtn("編集", v -> {
@@ -1261,70 +1263,112 @@ public class TapService extends AccessibilityService {
             }, this::sceneListDialog, "やめる");
         }));
 
-        // ≡ を押したまま上下に動かすと、隣の行と入れ替わる
-        handle.setOnTouchListener(new View.OnTouchListener() {
-            float startY, shift;
-            int pos;
-
-            public boolean onTouch(View v, MotionEvent e) {
-                switch (e.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        sv.requestDisallowInterceptTouchEvent(true);
-                        startY = e.getRawY();
-                        shift = 0;
-                        pos = list.indexOfChild(row);
-                        row.setAlpha(0.85f);
-                        row.setElevation(dp(8));
-                        row.setBackground(Ui.round(0xFF4A5A75, dp(12)));
-                        return true;
-                    case MotionEvent.ACTION_MOVE: {
-                        float dy = e.getRawY() - startY - shift;
-                        float step = row.getHeight() + dp(8);
-                        int last = work.size() - 1;
-                        if (dy > step / 2 && pos < last) {
-                            View next = list.getChildAt(pos + 1);
-                            list.removeView(next);
-                            list.addView(next, pos);
-                            java.util.Collections.swap(work, pos, pos + 1);
-                            pos++;
-                            shift += step;
-                            dy -= step;
-                        } else if (dy < -step / 2 && pos > 0) {
-                            View prev = list.getChildAt(pos - 1);
-                            list.removeView(prev);
-                            list.addView(prev, pos);
-                            java.util.Collections.swap(work, pos, pos - 1);
-                            pos--;
-                            shift -= step;
-                            dy += step;
-                        }
-                        row.setTranslationY(dy);
-                        return true;
-                    }
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        sv.requestDisallowInterceptTouchEvent(false);
-                        row.setTranslationY(0);
-                        row.setAlpha(1f);
-                        row.setElevation(0);
-                        row.setBackground(Ui.round(0xFF3A3D42, dp(12)));
-                        if (!work.equals(sc.rules)) {
-                            sc.rules.clear();
-                            sc.rules.addAll(work);
-                            sc.save(TapService.this);
-                            if (areaView != null) areaView.invalidate();
-                            renumber(list);
-                        }
-                        return true;
-                }
-                return false;
-            }
-        });
+        // ドラッグ＆ドロップで並べ替え：≡ はすぐ、行（画像・名前）は長押ししてから掴める
+        handle.setOnTouchListener(new RowDrag(row, list, sv, work, false));
+        RowDrag lp2 = new RowDrag(row, list, sv, work, true);
+        iv.setOnTouchListener(lp2);
+        txt.setOnTouchListener(lp2);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.setMargins(dp(4), dp(4), dp(4), dp(4));
         row.setLayoutParams(lp);
         return row;
+    }
+
+    /** 行を掴んで上下に動かし、離した場所に置く（ドラッグ＆ドロップ） */
+    private class RowDrag implements View.OnTouchListener {
+        final LinearLayout row, list;
+        final android.widget.ScrollView sv;
+        final List<Scenario.Rule> work;
+        final boolean longPress;
+        float startY, shift;
+        int pos;
+        boolean dragging;
+        final Runnable grab = new Runnable() {
+            public void run() { begin(); }
+        };
+
+        RowDrag(LinearLayout row, LinearLayout list, android.widget.ScrollView sv, List<Scenario.Rule> work, boolean longPress) {
+            this.row = row; this.list = list; this.sv = sv; this.work = work; this.longPress = longPress;
+        }
+
+        void begin() {
+            dragging = true;
+            sv.requestDisallowInterceptTouchEvent(true);
+            shift = 0;
+            pos = list.indexOfChild(row);
+            row.setAlpha(0.9f);
+            row.setElevation(dp(10));
+            row.setScaleX(1.03f);
+            row.setScaleY(1.03f);
+            row.setBackground(Ui.round(0xFF4A5A75, dp(12)));
+            row.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+        }
+
+        void end() {
+            h.removeCallbacks(grab);
+            if (!dragging) return;
+            dragging = false;
+            sv.requestDisallowInterceptTouchEvent(false);
+            row.setTranslationY(0);
+            row.setAlpha(1f);
+            row.setElevation(0);
+            row.setScaleX(1f);
+            row.setScaleY(1f);
+            row.setBackground(Ui.round(0xFF3A3D42, dp(12)));
+            if (!work.equals(sc.rules)) {
+                sc.rules.clear();
+                sc.rules.addAll(work);
+                sc.save(TapService.this);
+                if (areaView != null) areaView.invalidate();
+                renumber(list);
+            }
+        }
+
+        public boolean onTouch(View v, MotionEvent e) {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startY = e.getRawY();
+                    dragging = false;
+                    if (longPress) h.postDelayed(grab, 350);
+                    else begin();
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    if (!dragging) {
+                        // 長押しの前に指が動いた＝スクロールしたい。掴むのはやめる
+                        if (Math.abs(e.getRawY() - startY) > dp(10)) h.removeCallbacks(grab);
+                        return false;
+                    }
+                    float dy = e.getRawY() - startY - shift;
+                    float step = row.getHeight() + dp(8);
+                    int last = work.size() - 1;
+                    if (dy > step / 2 && pos < last) {
+                        View next = list.getChildAt(pos + 1);
+                        list.removeView(next);
+                        list.addView(next, pos);
+                        java.util.Collections.swap(work, pos, pos + 1);
+                        pos++;
+                        shift += step;
+                        dy -= step;
+                    } else if (dy < -step / 2 && pos > 0) {
+                        View prev = list.getChildAt(pos - 1);
+                        list.removeView(prev);
+                        list.addView(prev, pos);
+                        java.util.Collections.swap(work, pos, pos - 1);
+                        pos--;
+                        shift -= step;
+                        dy += step;
+                    }
+                    row.setTranslationY(dy);
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    end();
+                    return true;
+            }
+            return false;
+        }
     }
 
     /** 並べ替えのあと、行の番号を振り直す */

@@ -125,8 +125,8 @@ public class RulesActivity extends Activity {
             LinearLayout txt = Ui.vbox(this);
             txt.addView(Ui.text(this, isOther ? "どの場面でもないとき（クエスト中など）" : (i + 1) + ". " + r.name, 15, true));
             txt.addView(Ui.subText(this, "→ " + r.actLabel()));
-            String sub = "そのあと " + sec(r.waitMin) + "〜" + sec(r.waitMax) + "秒待つ";
-            if (!isOther) sub += "・判定 " + r.levelLabel() + (r.countLoop ? "・1周として数える" : "");
+            String sub = r.randomLabel();
+            if (!isOther) sub += "\n判定：" + r.levelLabel() + (r.countLoop ? "・1周として数える" : "");
             txt.addView(Ui.subText(this, sub));
             row.addView(txt, Ui.weight(1));
             if (!isOther) {

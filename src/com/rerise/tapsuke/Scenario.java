@@ -172,6 +172,26 @@ public class Scenario {
             return a;
         }
 
+        /** ランダムの中身を一言で（一覧に出す） */
+        public String randomLabel() {
+            String pos;
+            switch (act) {
+                case R_TAP_IMAGE: pos = "押す位置：画像の中央寄りでランダム"; break;
+                case R_TAP_AREA: pos = "押す位置：範囲内のどこでもランダム"; break;
+                case R_SWIPE_AREA: pos = "スワイプ：位置・長さ・曲がり・速さ(0.2〜0.6秒)がランダム"; break;
+                default: pos = null;
+            }
+            int ti = Ui.tempoIndex(waitMin, waitMax);
+            String wait = "待ち：" + secText(waitMin) + "〜" + secText(waitMax) + "秒"
+                    + (ti >= 0 ? "（" + Ui.TEMPO_NAMES[ti] + "）" : "") + (waitMax > waitMin ? "でランダム" : "で固定");
+            return pos == null ? wait : pos + "\n" + wait;
+        }
+
+        static String secText(int ms) {
+            String t = String.valueOf(ms / 1000.0);
+            return t.endsWith(".0") ? t.substring(0, t.length() - 2) : t;
+        }
+
         public String levelLabel() {
             for (int i = 0; i < LEVELS.length; i++) if (threshold == LEVELS[i]) return LEVEL_NAMES[i].replaceAll("（.*", "");
             return threshold + "%";
