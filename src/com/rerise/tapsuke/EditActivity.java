@@ -57,18 +57,23 @@ public class EditActivity extends Activity {
         maxMin = Ui.number(this, sc.maxMinutes);
         set.addView(Ui.field(this, "この時間で自動停止（0＝なし）", maxMin, "分"));
         loopWait = Ui.number(this, sc.loopWait);
-        set.addView(Ui.field(this, "1周ごとの追加の待ち", loopWait, "ms"));
-        set.addView(Ui.text(this, "ランダム化（人の操作に近づける）", 16, true), Ui.mw(this, 12));
+        set.addView(Ui.field(this, "1周ごとの追加の待ち（1000＝1秒）", loopWait, "ms"));
+        set.addView(Ui.text(this, "ばらつき（人の操作に近づける）", 16, true), Ui.mw(this, 12));
+        set.addView(Ui.subText(this, "押す位置と待ち時間を、毎回どれくらい変えるか。選ぶと下の数字が自動で入ります。"));
         jitPx = Ui.number(this, sc.jitterPx);
-        set.addView(Ui.field(this, "位置のズレ（半径）", jitPx, "px"));
         jitPct = Ui.number(this, sc.jitterPct);
-        set.addView(Ui.field(this, "間隔のズレ（±）", jitPct, "%"));
+        set.addView(Ui.chips(this, Ui.SPREAD_NAMES, Ui.spreadIndex(sc.jitterPx, sc.jitterPct), k -> {
+            jitPx.setText(String.valueOf(Ui.SPREAD[k][0]));
+            jitPct.setText(String.valueOf(Ui.SPREAD[k][1]));
+        }), Ui.mw(this, 6));
+        set.addView(Ui.field(this, "位置のズレ（半径。20で約2mm）", jitPx, "px"), Ui.mw(this, 6));
+        set.addView(Ui.field(this, "間隔のズレ（20なら±20%）", jitPct, "%"));
         root.addView(Ui.cardView(this, set), Ui.mw(this, 14));
 
         // 手順
         LinearLayout head = Ui.hbox(this);
         head.addView(Ui.text(this, "手順", 16, true), Ui.weight(1));
-        head.addView(Ui.button(this, "待ち時間を一括", v -> bulkAfter()));
+        head.addView(Ui.button(this, "テンポを一括", v -> bulkAfter()));
         root.addView(head, Ui.mw(this, 16));
         root.addView(Ui.subText(this, "位置はパネルのマーカーをドラッグして合わせるのが簡単です。行をタップすると数値で直せます。"
                 + "画像の手順は、パネルの「◫」で画面から登録します。"));
@@ -124,7 +129,7 @@ public class EditActivity extends Activity {
             LinearLayout row = Ui.hbox(this);
             if (s.isImage()) {
                 ImageView iv = new ImageView(this);
-                android.graphics.Bitmap bm = Templates.bitmap(this, s.tpl);
+                android.graphics.Bitmap bm = Templates.thumb(this, s.tpl);
                 if (bm != null) iv.setImageBitmap(bm);
                 iv.setAdjustViewBounds(true);
                 iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -239,6 +244,11 @@ public class EditActivity extends Activity {
         if (s.type == Scenario.TAP || s.type == Scenario.LONG) box.addView(Ui.field(this, "押す時間", dur, "ms"));
         if (s.isSwipeLike()) box.addView(Ui.field(this, "動かす時間", dur, "ms"));
         String wl = s.type == Scenario.WAIT ? "待つ時間" : (s.type == Scenario.UNTIL && s.act != Scenario.ACT_NONE) ? "くり返しの間隔" : "そのあと待つ";
+        box.addView(Ui.subText(this, wl + "のテンポ（選ぶと下の数字が入ります）"));
+        box.addView(Ui.chips(this, Ui.TEMPO_NAMES, Ui.tempoIndex(s.after, s.afterMax), k -> {
+            after.setText(String.valueOf(Ui.TEMPO[k][0]));
+            afterMax.setText(String.valueOf(Ui.TEMPO[k][1]));
+        }));
         box.addView(Ui.field(this, wl + "（最短）", after, "ms"));
         box.addView(Ui.field(this, wl + "（最長）", afterMax, "ms"));
         box.addView(Ui.subText(this, "最短〜最長の間でランダムに待ちます。同じにすると全体設定の「間隔のズレ」を使います。"));
@@ -273,17 +283,17 @@ public class EditActivity extends Activity {
     }
 
     private void bulkAfter() {
-        final EditText e = Ui.number(this, 500);
-        LinearLayout box = Ui.vbox(this);
-        int p = Ui.dp(this, 20);
-        box.setPadding(p, Ui.dp(this, 8), p, 0);
-        box.addView(Ui.field(this, "すべての「そのあと待つ」", e, "ms"));
-        new AlertDialog.Builder(this).setTitle("待ち時間を一括変更").setView(box)
-                .setNegativeButton("やめる", null)
-                .setPositiveButton("OK", (d, w) -> {
-                    int v = Math.max(0, Ui.parse(e, 500));
-                    for (Scenario.Step s : sc.steps) if (s.type != Scenario.WAIT) s.after = v;
-                    renderSteps();
-                }).show();
+        new AlertDialog.Builder(this).setTitle("すべての手順のテンポをそろえる")
+                .setItems(new String[]{
+                        "速め（0.3〜0.7秒待つ）", "普通（0.8〜1.5秒）", "ゆっくり（1.5〜3秒）", "かなりゆっくり（3〜6秒）"},
+                        (d, k) -> {
+                            for (Scenario.Step s : sc.steps) {
+                                if (s.type == Scenario.WAIT) continue;
+                                s.after = Ui.TEMPO[k][0];
+                                s.afterMax = Ui.TEMPO[k][1];
+                            }
+                            renderSteps();
+                        })
+                .setNegativeButton("やめる", null).show();
     }
 }

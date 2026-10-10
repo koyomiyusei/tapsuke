@@ -135,4 +135,61 @@ public class Ui {
         }
         return row;
     }
+
+    public interface OnPick { void pick(int which); }
+
+    /** 選択肢ボタンを横に並べる（押したものが青くなる）。数字を入れなくても選ぶだけで決まる */
+    public static LinearLayout chips(final Context c, String[] labels, int selected, final OnPick onPick) {
+        final LinearLayout row = hbox(c);
+        for (int i = 0; i < labels.length; i++) {
+            final int idx = i;
+            Button b = new Button(c);
+            b.setText(labels[i]);
+            b.setAllCaps(false);
+            b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            b.setMinHeight(dp(c, 40));
+            b.setMinimumHeight(dp(c, 40));
+            b.setPadding(dp(c, 4), 0, dp(c, 4), 0);
+            b.setOnClickListener(v -> {
+                markChip(c, row, idx);
+                onPick.pick(idx);
+            });
+            LinearLayout.LayoutParams lp = weight(1);
+            lp.rightMargin = dp(c, 4);
+            row.addView(b, lp);
+        }
+        markChip(c, row, selected);
+        return row;
+    }
+
+    public static void markChip(Context c, LinearLayout row, int selected) {
+        for (int i = 0; i < row.getChildCount(); i++) {
+            View v = row.getChildAt(i);
+            if (!(v instanceof Button)) continue;
+            Button b = (Button) v;
+            boolean on = i == selected;
+            b.setBackground(round(on ? ACCENT : card(c), dp(c, 10)));
+            b.setTextColor(on ? Color.WHITE : fg(c));
+        }
+    }
+
+    // ---- 言葉で選べる目安（数字はこの値が自動で入る） ----
+
+    /** ばらつき：位置のズレ(px) と 間隔のズレ(%) */
+    public static final String[] SPREAD_NAMES = {"なし", "小", "中", "大"};
+    public static final int[][] SPREAD = {{0, 0}, {8, 10}, {20, 25}, {40, 45}};
+
+    /** テンポ：待ち時間の最短〜最長(ms) */
+    public static final String[] TEMPO_NAMES = {"速め", "普通", "ゆっくり", "かなりゆっくり"};
+    public static final int[][] TEMPO = {{300, 700}, {800, 1500}, {1500, 3000}, {3000, 6000}};
+
+    public static int spreadIndex(int px, int pct) {
+        for (int i = 0; i < SPREAD.length; i++) if (SPREAD[i][0] == px && SPREAD[i][1] == pct) return i;
+        return -1;
+    }
+
+    public static int tempoIndex(int min, int max) {
+        for (int i = 0; i < TEMPO.length; i++) if (TEMPO[i][0] == min && TEMPO[i][1] == max) return i;
+        return -1;
+    }
 }

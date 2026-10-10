@@ -61,10 +61,17 @@ public class RulesActivity extends Activity {
         maxMin = Ui.number(this, sc.maxMinutes);
         set.addView(Ui.field(this, "この時間で止める（0＝止めない）", maxMin, "分"), Ui.mw(this, 6));
         stuck = Ui.number(this, sc.stuckSec);
-        set.addView(Ui.field(this, "どの場面も見つからないまま続いたら止める（0＝止めない）", stuck, "秒"), Ui.mw(this, 6));
+        set.addView(Ui.text(this, "どの場面も見つからないまま続いたら止める", 15, false), Ui.mw(this, 10));
+        final int[] stuckVals = {0, 60, 180, 600};
+        int si = -1;
+        for (int i = 0; i < stuckVals.length; i++) if (stuckVals[i] == sc.stuckSec) si = i;
+        set.addView(Ui.chips(this, new String[]{"止めない", "1分", "3分", "10分"}, si,
+                k -> stuck.setText(String.valueOf(stuckVals[k]))), Ui.mw(this, 4));
+        set.addView(Ui.field(this, "数字で決める（0＝止めない）", stuck, "秒"));
         set.addView(Ui.subText(this, "固まった・想定外の画面になった、を見つけるための設定です。クエストの長さより長めにしてください。"));
         root.addView(Ui.cardView(this, set), Ui.mw(this, 14));
 
+        root.addView(Ui.button(this, "すべての場面のテンポをそろえる", v -> bulkTempo()), Ui.mw(this, 12));
         root.addView(Ui.text(this, "場面（上にあるものを優先）", 16, true), Ui.mw(this, 16));
         root.addView(Ui.subText(this, "行をタップすると、名前・判定のゆるさ・待ち時間などを変えられます。"));
         listBox = Ui.vbox(this);
@@ -108,7 +115,7 @@ public class RulesActivity extends Activity {
             LinearLayout row = Ui.hbox(this);
             if (!isOther) {
                 ImageView iv = new ImageView(this);
-                Bitmap bm = Templates.bitmap(this, r.tpl);
+                Bitmap bm = Templates.thumb(this, r.tpl);
                 if (bm != null) iv.setImageBitmap(bm);
                 iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(Ui.dp(this, 56), Ui.dp(this, 56));
@@ -233,6 +240,10 @@ public class RulesActivity extends Activity {
 
         box.addView(Ui.text(this, "操作のあと待つ時間（この間でランダム）", 15, true), Ui.mw(this, 10));
         final EditText wMin = decimal(r.waitMin), wMax = decimal(r.waitMax);
+        box.addView(Ui.chips(this, Ui.TEMPO_NAMES, Ui.tempoIndex(r.waitMin, r.waitMax), k -> {
+            wMin.setText(sec(Ui.TEMPO[k][0]));
+            wMax.setText(sec(Ui.TEMPO[k][1]));
+        }));
         box.addView(Ui.field(this, "最短", wMin, "秒"));
         box.addView(Ui.field(this, "最長", wMax, "秒"));
 
@@ -266,5 +277,18 @@ public class RulesActivity extends Activity {
                 });
         if (!isOther) b.setNeutralButton("削除", (d, w) -> { sc.rules.remove(r); render(); });
         b.show();
+    }
+
+    private void bulkTempo() {
+        new AlertDialog.Builder(this).setTitle("操作のあと待つ時間をそろえる")
+                .setItems(new String[]{
+                        "速め（0.3〜0.7秒）", "普通（0.8〜1.5秒）", "ゆっくり（1.5〜3秒）", "かなりゆっくり（3〜6秒）"},
+                        (d, k) -> {
+                            java.util.List<Scenario.Rule> all = new java.util.ArrayList<>(sc.rules);
+                            all.add(sc.other);
+                            for (Scenario.Rule r : all) { r.waitMin = Ui.TEMPO[k][0]; r.waitMax = Ui.TEMPO[k][1]; }
+                            render();
+                        })
+                .setNegativeButton("やめる", null).show();
     }
 }

@@ -59,6 +59,20 @@ public class Templates {
         return BitmapFactory.decodeFile(file(c, id).getAbsolutePath());
     }
 
+    /** 一覧に出すための小さい画像（メモリを使いすぎないように縮めて読む） */
+    public static Bitmap thumb(Context c, String id) {
+        if (!exists(c, id)) return null;
+        String path = file(c, id).getAbsolutePath();
+        BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(path, o);
+        int s = 1;
+        while (Math.max(o.outWidth, o.outHeight) / s > 320) s *= 2;
+        o = new BitmapFactory.Options();
+        o.inSampleSize = s;
+        return BitmapFactory.decodeFile(path, o);
+    }
+
     /** 照合用に前処理したお手本（読み込みは1回だけ） */
     public static synchronized Matcher.Tpl tpl(Context c, String id) {
         Matcher.Tpl t = cache.get(id);
