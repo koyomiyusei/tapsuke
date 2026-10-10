@@ -435,8 +435,8 @@ public class TapService extends AccessibilityService {
         if (rules()) {
             TextView add = lbtn("＋場面", v -> addSceneFlow(-1));
             TextView chk = lbtn("確認", v -> checkNow());
-            TextView list = lbtn("一覧", v -> sceneListDialog());
-            btnEye = lbtn("範囲", v -> toggleMarkers());
+            TextView list = lbtn("場面一覧", v -> sceneListDialog());
+            btnEye = lbtn("枠表示", v -> toggleMarkers());
             TextView close = pbtn("✕", v -> closePanel());
             row.addView(add);
             row.addView(chk);
@@ -1110,22 +1110,235 @@ public class TapService extends AccessibilityService {
         });
     }
 
-    /** 場面の一覧（パネルの「一覧」） */
+    /** 場面の一覧（パネルの「場面一覧」） */
+    /**
+     * 場面の一覧（パネルの「場面一覧」）。行の ≡ をドラッグして並べ替え、「編集」「削除」はその行から。
+     * 上にある場面ほど優先される。
+     */
     private void sceneListDialog() {
         if (sc == null || playing || busy) return;
-        final int n = sc.rules.size();
-        String[] items = new String[n + 2];
-        for (int i = 0; i < n; i++) {
-            Scenario.Rule r = sc.rules.get(i);
-            items[i] = (i + 1) + ". " + r.name + "\n　→ " + r.actLabel();
+        closeMenu();
+        final int[] sz = screenSize();
+        final List<Scenario.Rule> work = new ArrayList<>(sc.rules);
+
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.setBackgroundColor(0x99000000);
+        root.setOnClickListener(v -> closeMenu());
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(Ui.round(0xFF2B2D31, dp(18)));
+        card.setPadding(dp(8), dp(14), dp(8), dp(6));
+        card.setOnClickListener(v -> { });
+
+        card.addView(sheetText("場面の一覧（上にあるほど優先）", 17, Color.WHITE, true, dp(12), 0));
+        card.addView(sheetText("左の ≡ を上下にドラッグすると順番を変えられます", 12, 0xFFBDBDBD, false, dp(12), dp(8)));
+
+        final android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(list);
+
+        if (work.isEmpty()) {
+            list.addView(sheetText("まだ場面がありません。下の「＋場面を追加」か、パネルの「＋場面」から追加してください。",
+                    14, 0xFFE6E6E6, false, dp(12), dp(8)));
         }
-        items[n] = "どの場面でもないとき\n　→ " + sc.other.actLabel();
-        items[n + 1] = "くわしい設定を開く（回数・時間・判定など）";
-        showMenu("場面の一覧（上にあるものを優先）", items, which -> {
-            if (which < n) sceneMenu(which);
-            else if (which == n) otherMenu();
-            else openEditor();
-        }, null, "閉じる");
+        for (int i = 0; i < work.size(); i++) list.addView(sceneRow(work.get(i), i, list, sv, work));
+
+        // どの場面でもないとき（いつも一番下）
+        LinearLayout other = new LinearLayout(this);
+        other.setOrientation(LinearLayout.HORIZONTAL);
+        other.setGravity(Gravity.CENTER_VERTICAL);
+        other.setBackground(Ui.round(0xFF3A3D42, dp(12)));
+        other.setPadding(dp(12), dp(10), dp(6), dp(10));
+        LinearLayout ot = new LinearLayout(this);
+        ot.setOrientation(LinearLayout.VERTICAL);
+        ot.addView(sheetText("どの場面でもないとき（いつも最後）", 14, Color.WHITE, true, 0, 0));
+        ot.addView(sheetText("→ " + sc.other.actLabel(), 12, 0xFFBDBDBD, false, 0, 0));
+        other.addView(ot, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        other.addView(smallBtn("編集", v -> { closeMenu(); otherMenu(); }));
+        LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        olp.setMargins(dp(4), dp(10), dp(4), dp(4));
+        list.addView(other, olp);
+
+        card.addView(sv, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout foot = new LinearLayout(this);
+        foot.setOrientation(LinearLayout.HORIZONTAL);
+        foot.addView(footBtn("＋場面を追加", v -> { closeMenu(); addSceneFlow(-1); }), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        foot.addView(footBtn("くわしい設定", v -> { closeMenu(); openEditor(); }), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        foot.addView(footBtn("閉じる", v -> closeMenu()), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        card.addView(foot);
+
+        android.widget.FrameLayout.LayoutParams cp = new android.widget.FrameLayout.LayoutParams(
+                Math.min(sz[0] - dp(24), dp(420)), android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        cp.topMargin = dp(60);
+        cp.bottomMargin = dp(60);
+        root.addView(card, cp);
+        menuView = root;
+        addSafe(root, overlayLp(sz[0], sz[1]));
+    }
+
+    private TextView sheetText(String s, float sp, int color, boolean bold, int padH, int padB) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
+        t.setPadding(padH, 0, padH, padB);
+        return t;
+    }
+
+    private TextView smallBtn(String s, View.OnClickListener l) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextColor(0xFFFFD166);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(10), dp(10), dp(10), dp(10));
+        t.setOnClickListener(v -> {
+            try {
+                l.onClick(v);
+            } catch (Throwable e) {
+                App.log(TapService.this, e);
+            }
+        });
+        return t;
+    }
+
+    private TextView footBtn(String s, View.OnClickListener l) {
+        TextView t = smallBtn(s, l);
+        t.setPadding(dp(4), dp(14), dp(4), dp(10));
+        return t;
+    }
+
+    /** 一覧の1行：≡（ドラッグで並べ替え）・目印の小さい画像・名前とやること・編集・削除 */
+    private View sceneRow(final Scenario.Rule r, int index, final LinearLayout list,
+                          final android.widget.ScrollView sv, final List<Scenario.Rule> work) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(Ui.round(0xFF3A3D42, dp(12)));
+        row.setPadding(0, dp(6), dp(2), dp(6));
+        row.setTag(r);
+
+        TextView handle = new TextView(this);
+        handle.setText("≡");
+        handle.setTextColor(0xFFBDBDBD);
+        handle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        handle.setGravity(Gravity.CENTER);
+        handle.setMinWidth(dp(44));
+        handle.setMinHeight(dp(48));
+        row.addView(handle);
+
+        android.widget.ImageView iv = new android.widget.ImageView(this);
+        Bitmap bm = Templates.thumb(this, r.tpl);
+        if (bm != null) iv.setImageBitmap(bm);
+        iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(44), dp(44));
+        ip.rightMargin = dp(8);
+        row.addView(iv, ip);
+
+        LinearLayout txt = new LinearLayout(this);
+        txt.setOrientation(LinearLayout.VERTICAL);
+        final TextView name = sheetText((index + 1) + ". " + r.name, 14, Color.WHITE, true, 0, 0);
+        txt.addView(name);
+        txt.addView(sheetText("→ " + r.actLabel() + (r.countLoop ? "・1周" : ""), 12, 0xFFBDBDBD, false, 0, 0));
+        row.addView(txt, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        row.addView(smallBtn("編集", v -> {
+            int i = sc.rules.indexOf(r);
+            closeMenu();
+            if (i >= 0) sceneMenu(i);
+        }));
+        row.addView(smallBtn("削除", v -> {
+            closeMenu();
+            showMenu("「" + r.name + "」を削除しますか？", new String[]{"削除する"}, w -> {
+                sc.rules.remove(r);
+                saveAndRefresh();
+                Templates.cleanup(this);
+                sceneListDialog();
+            }, this::sceneListDialog, "やめる");
+        }));
+
+        // ≡ を押したまま上下に動かすと、隣の行と入れ替わる
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            float startY, shift;
+            int pos;
+
+            public boolean onTouch(View v, MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        sv.requestDisallowInterceptTouchEvent(true);
+                        startY = e.getRawY();
+                        shift = 0;
+                        pos = list.indexOfChild(row);
+                        row.setAlpha(0.85f);
+                        row.setElevation(dp(8));
+                        row.setBackground(Ui.round(0xFF4A5A75, dp(12)));
+                        return true;
+                    case MotionEvent.ACTION_MOVE: {
+                        float dy = e.getRawY() - startY - shift;
+                        float step = row.getHeight() + dp(8);
+                        int last = work.size() - 1;
+                        if (dy > step / 2 && pos < last) {
+                            View next = list.getChildAt(pos + 1);
+                            list.removeView(next);
+                            list.addView(next, pos);
+                            java.util.Collections.swap(work, pos, pos + 1);
+                            pos++;
+                            shift += step;
+                            dy -= step;
+                        } else if (dy < -step / 2 && pos > 0) {
+                            View prev = list.getChildAt(pos - 1);
+                            list.removeView(prev);
+                            list.addView(prev, pos);
+                            java.util.Collections.swap(work, pos, pos - 1);
+                            pos--;
+                            shift -= step;
+                            dy += step;
+                        }
+                        row.setTranslationY(dy);
+                        return true;
+                    }
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        sv.requestDisallowInterceptTouchEvent(false);
+                        row.setTranslationY(0);
+                        row.setAlpha(1f);
+                        row.setElevation(0);
+                        row.setBackground(Ui.round(0xFF3A3D42, dp(12)));
+                        if (!work.equals(sc.rules)) {
+                            sc.rules.clear();
+                            sc.rules.addAll(work);
+                            sc.save(TapService.this);
+                            if (areaView != null) areaView.invalidate();
+                            renumber(list);
+                        }
+                        return true;
+                }
+                return false;
+            }
+        });
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(dp(4), dp(4), dp(4), dp(4));
+        row.setLayoutParams(lp);
+        return row;
+    }
+
+    /** 並べ替えのあと、行の番号を振り直す */
+    private void renumber(LinearLayout list) {
+        int n = 0;
+        for (int i = 0; i < list.getChildCount(); i++) {
+            View v = list.getChildAt(i);
+            if (!(v.getTag() instanceof Scenario.Rule)) continue;
+            Scenario.Rule r = (Scenario.Rule) v.getTag();
+            n++;
+            LinearLayout row = (LinearLayout) v;
+            LinearLayout txt = (LinearLayout) row.getChildAt(2);
+            ((TextView) txt.getChildAt(0)).setText(n + ". " + r.name);
+        }
     }
 
     private void sceneMenu(final int i) {

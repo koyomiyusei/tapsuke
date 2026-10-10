@@ -1,6 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "1.3",
+  "versionCode": 5,
+  "versionName": "1.4",
   "apkUrl": "https://raw.githubusercontent.com/koyomiyusei/tapsuke/main/Tapsuke.apk",
-  "notes": "数字を入れなくても選ぶだけで設定できるように：ばらつき（なし・小・中・大）、テンポ（速め・普通・ゆっくり・かなりゆっくり）、固まったら止める（止めない・1分・3分・10分）。テンポは全手順・全場面を一括でそろえられます"
+  "notes": "場面一覧を作り直し：≡をドラッグして順番を変更、各行から編集・削除。パネルのボタン名を「場面一覧」「枠表示」に変更"
 }

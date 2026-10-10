@@ -44,7 +44,7 @@ public class RulesActivity extends Activity {
         });
 
         root.addView(Ui.text(this, "くわしい設定", 22, true));
-        root.addView(Ui.subText(this, "場面の追加や、目印・範囲の取り直しは、対象のアプリの上でパネルの「＋場面」「一覧」から行います。"),
+        root.addView(Ui.subText(this, "場面の追加や、目印・範囲の取り直しは、対象のアプリの上でパネルの「＋場面」「場面一覧」から行います。"),
                 Ui.mw(this, 4));
 
         name = new EditText(this);
@@ -202,7 +202,7 @@ public class RulesActivity extends Activity {
             box.addView(nm);
         }
 
-        // やること（範囲が必要なものへ変えるときは、パネルの「一覧」から変える）
+        // やること（範囲が必要なものへ変えるときは、パネルの「場面一覧」から変える）
         final int[] acts = isOther
                 ? new int[]{Scenario.R_SWIPE_AREA, Scenario.R_TAP_AREA, Scenario.R_WAIT}
                 : new int[]{0, 1, 2, 3, 4};
@@ -215,7 +215,7 @@ public class RulesActivity extends Activity {
         box.addView(Ui.text(this, "やること", 15, true), Ui.mw(this, 10));
         final RadioGroup actG = radios(actNames, cur);
         box.addView(actG);
-        if (!r.hasArea()) box.addView(Ui.subText(this, "※「範囲の中を…」を選んだら、パネルの「一覧」→この場面→「操作する範囲を決め直す」で範囲を囲んでください。"));
+        if (!r.hasArea()) box.addView(Ui.subText(this, "※「範囲の中を…」を選んだら、パネルの「場面一覧」→この場面→「操作する範囲を決め直す」で範囲を囲んでください。"));
 
         box.addView(Ui.text(this, "スワイプの向き", 15, true), Ui.mw(this, 10));
         final RadioGroup dirG = radios(Scenario.DIR_NAMES, r.dir);
