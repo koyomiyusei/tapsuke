@@ -192,4 +192,24 @@ public class Ui {
         for (int i = 0; i < TEMPO.length; i++) if (TEMPO[i][0] == min && TEMPO[i][1] == max) return i;
         return -1;
     }
+
+    /** テンポのゆらぎ（人の操作に近づける）の設定カード。選ぶとその場で sc に入る（保存は呼び出し側） */
+    public static View paceCard(Context c, final Scenario sc) {
+        LinearLayout box = vbox(c);
+        box.addView(text(c, "テンポのゆらぎ（人の操作に近づける）", 16, true));
+        box.addView(subText(c, "押す位置だけでなく、押すペースも毎回変えます。"));
+        box.addView(text(c, "待ち時間の散らし方", 14, false), mw(c, 10));
+        box.addView(subText(c, "人っぽく：短めの間隔が多く、たまに長めになる"));
+        box.addView(chips(c, new String[]{"均等", "人っぽく"}, sc.paceMode, k -> sc.paceMode = k), mw(c, 4));
+        box.addView(text(c, "たまに手を止める", 14, false), mw(c, 10));
+        box.addView(subText(c, "ときどき：約3%の確率で2〜6秒止まる／よく：約8%の確率で3〜12秒止まる"));
+        box.addView(chips(c, Scenario.PAUSE_NAMES, sc.pauseLevel, k -> sc.pauseLevel = k), mw(c, 4));
+        box.addView(text(c, "長めの休憩", 14, false), mw(c, 10));
+        box.addView(subText(c, "15〜30分ごと：1〜3分休む／30〜60分ごと：3〜8分休む（休憩は実行ログに残ります）"));
+        box.addView(chips(c, Scenario.BREAK_NAMES, sc.breakLevel, k -> sc.breakLevel = k), mw(c, 4));
+        box.addView(text(c, "押している長さ", 14, false), mw(c, 10));
+        box.addView(subText(c, "ばらつく：0.03〜0.25秒の間で毎回変わる（短めが多い）"));
+        box.addView(chips(c, Scenario.HOLD_NAMES, sc.tapHold, k -> sc.tapHold = k), mw(c, 4));
+        return cardView(c, box);
+    }
 }

@@ -19,6 +19,9 @@ import java.util.UUID;
 /** シナリオ＝手順（ステップ）の並びと、繰り返し・ランダム化の設定 */
 public class Scenario {
 
+    // 下の配列の初期化で使う（R_ の値と同じ）
+    private static final int R_TAP_IMAGE_ = 0, R_TAP_AREA_ = 1, R_SWIPE_AREA_ = 2, R_WAIT_ = 3, R_STOP_ = 4;
+
     public static final int TAP = 0;
     public static final int LONG = 1;
     public static final int SWIPE = 2;
@@ -143,7 +146,16 @@ public class Scenario {
 
     // ---------------- 場面モード（この画面が見えたら、これをする） ----------------
 
-    public static final int MODE_SEQ = 0, MODE_RULES = 1;
+    public static final int MODE_SEQ = 0, MODE_RULES = 1, MODE_FLOW = 2;
+    public static final String[] MODE_NAMES = {"座標型（決まった位置を順に押す）", "場面型（見えた画面に応じて動く）", "流れ型（画像を目印に順番に進む）"};
+
+    // 流れ型の手順の種類
+    public static final int K_IMAGE = 0;  // 画像が出たら、押す（または確認だけ・停止）
+    public static final int K_FILL = 1;   // 次の画像が出るまで、範囲の中を操作し続ける
+    public static final String[] IMG_ACT_NAMES = {"その画像の中をタップ", "決めた範囲の中をタップ", "押さずに次へ（出たことの確認だけ）", "実行を止める"};
+    public static final int[] IMG_ACTS = {R_TAP_IMAGE_, R_TAP_AREA_, R_WAIT_, R_STOP_};
+    public static final String[] FILL_ACT_NAMES = {"範囲の中をランダムにスワイプ", "範囲の中をランダムにタップ", "何もせず待つ"};
+    public static final int[] FILL_ACTS = {R_SWIPE_AREA_, R_TAP_AREA_, R_WAIT_};
     public static final int R_TAP_IMAGE = 0, R_TAP_AREA = 1, R_SWIPE_AREA = 2, R_WAIT = 3, R_STOP = 4;
     public static final String[] R_NAMES = {"その画像の中をタップ", "決めた範囲の中をタップ", "決めた範囲の中をスワイプ",
             "何もしない（待つ）", "実行を止める"};
@@ -160,6 +172,26 @@ public class Scenario {
         public int threshold = 82;    // 一致の判定（%）
         public int waitMin = 800, waitMax = 1500; // 操作のあと待つ時間（ms）この間でランダム
         public boolean countLoop;     // この場面が出るたびに「1周」と数える
+        // 流れ型の手順として使うとき
+        public int kind = K_IMAGE;
+        public int timeoutSec = 60;       // この秒数で見つからない（FILLは続ける上限）
+        public boolean skipOnTimeout;     // true=次の手順へ / false=止める
+        public List<Rule> extras = new ArrayList<>(); // この手順の間の「優先ボタン」（上ほど優先）
+        public boolean advance;           // 優先ボタンとして：押したら次の手順へ進む
+        public int jumpTo = -1;           // 優先ボタンとして：押したらこの手順（0始まり）へ進む
+        public List<String> alts = new ArrayList<>(); // 目印の画像の追加分（どれか1つが出たら）
+        public boolean search;            // 見つからないとき、範囲をスワイプして探す
+        public int sl, st, sr, sb, sdir = 1, searchMax = 5; // 探すときにスワイプする範囲・向き・最大回数
+
+        public boolean hasSearchArea() { return sr - sl > 4 && sb - st > 4; }
+
+        /** 目印の画像すべて（1枚目＋追加分） */
+        public List<String> allTpls() {
+            List<String> l = new ArrayList<>();
+            if (tpl != null) l.add(tpl);
+            l.addAll(alts);
+            return l;
+        }
 
         public boolean hasArea() { return ar - al > 4 && ab - at > 4; }
 
@@ -170,6 +202,51 @@ public class Scenario {
             if (act == R_SWIPE_AREA) a += "（" + DIR_NAMES[dir] + "）";
             if (needsArea() && !hasArea()) a += " ※範囲が未設定";
             return a;
+        }
+
+        /** 優先ボタンとしての説明 */
+        public String extraLabel() {
+            String what = act == R_TAP_IMAGE_ ? "画像の中をタップ" : act == R_TAP_AREA_ ? "決めた範囲の中をタップ"
+                    : act == R_STOP_ ? "実行を止める" : "押さない";
+            if (needsArea() && !hasArea()) what += " ※範囲が未設定";
+            if (act == R_STOP_) return "出たら → " + what;
+            if (jumpTo >= 0) return "出たら → " + what + "、手順" + (jumpTo + 1) + "へ進む";
+            return "出たら → " + what + "、" + (advance ? "次の手順へ進む" : "この手順を続ける");
+        }
+
+        public static final String[] EXTRA_NAMES = {
+                "タップして、次の手順へ進む", "タップして、この手順を続ける",
+                "決めた範囲をタップして、次の手順へ進む", "決めた範囲をタップして、この手順を続ける",
+                "実行を止める", "タップして、指定した手順へ進む（分かれ道）"};
+
+        /** EXTRA_NAMES の選択を設定に反映 */
+        public void applyExtraChoice(int w) {
+            act = (w == 0 || w == 1 || w == 5) ? R_TAP_IMAGE_ : (w == 2 || w == 3) ? R_TAP_AREA_ : R_STOP_;
+            advance = (w == 0 || w == 2);
+            if (w != 5) jumpTo = -1;
+        }
+
+        public int extraChoice() {
+            if (act == R_STOP_) return 4;
+            if (jumpTo >= 0) return 5;
+            return (act == R_TAP_AREA_ ? 2 : 0) + (advance ? 0 : 1);
+        }
+
+        /** 流れ型の手順としての説明 */
+        public String flowLabel() {
+            if (kind == K_FILL) {
+                int a = act;
+                String what = a == R_SWIPE_AREA_ ? "範囲の中をランダムにスワイプ" + (dir > 0 ? "（" + DIR_NAMES[dir] + "）" : "")
+                        : a == R_TAP_AREA_ ? "範囲の中をランダムにタップ" : "何もせず待つ";
+                if (needsArea() && !hasArea()) what += " ※範囲が未設定";
+                return "次の画像が出るまで → " + what;
+            }
+            String what = act == R_TAP_IMAGE_ ? "画像の中をタップ" : act == R_TAP_AREA_ ? "決めた範囲の中をタップ"
+                    : act == R_STOP_ ? "実行を止める" : "押さずに次へ";
+            if (needsArea() && !hasArea()) what += " ※範囲が未設定";
+            String imgs = alts.isEmpty() ? "画像" : "画像" + (alts.size() + 1) + "枚のどれか";
+            String srch = search && hasSearchArea() ? "（見つからなければスワイプして探す・最大" + searchMax + "回）" : "";
+            return imgs + "が出たら → " + what + srch;
         }
 
         /** ランダムの中身を一言で（一覧に出す） */
@@ -207,6 +284,20 @@ public class Scenario {
             o.put("threshold", threshold);
             o.put("waitMin", waitMin); o.put("waitMax", waitMax);
             o.put("countLoop", countLoop);
+            o.put("kind", kind);
+            o.put("timeoutSec", timeoutSec);
+            o.put("skipOnTimeout", skipOnTimeout);
+            o.put("advance", advance);
+            o.put("jumpTo", jumpTo);
+            if (!alts.isEmpty()) o.put("alts", new JSONArray(alts));
+            o.put("search", search);
+            o.put("sl", sl); o.put("st", st); o.put("sr", sr); o.put("sb", sb);
+            o.put("sdir", sdir); o.put("searchMax", searchMax);
+            if (!extras.isEmpty()) {
+                JSONArray ea = new JSONArray();
+                for (Rule e : extras) ea.put(e.toJson());
+                o.put("extras", ea);
+            }
             return o;
         }
 
@@ -222,14 +313,44 @@ public class Scenario {
             r.waitMin = Math.max(0, o.optInt("waitMin", 800));
             r.waitMax = Math.max(r.waitMin, o.optInt("waitMax", 1500));
             r.countLoop = o.optBoolean("countLoop", false);
+            r.kind = o.optInt("kind", K_IMAGE) == K_FILL ? K_FILL : K_IMAGE;
+            r.timeoutSec = Math.max(1, o.optInt("timeoutSec", 60));
+            r.skipOnTimeout = o.optBoolean("skipOnTimeout", false);
+            r.advance = o.optBoolean("advance", false);
+            r.jumpTo = o.optInt("jumpTo", -1);
+            JSONArray aa = o.optJSONArray("alts");
+            if (aa != null) for (int i = 0; i < aa.length(); i++) {
+                String a = aa.optString(i, "").replaceAll("[^A-Za-z0-9_-]", "");
+                if (!a.isEmpty()) r.alts.add(a);
+            }
+            r.search = o.optBoolean("search", false);
+            r.sl = o.optInt("sl"); r.st = o.optInt("st"); r.sr = o.optInt("sr"); r.sb = o.optInt("sb");
+            r.sdir = Math.max(0, Math.min(4, o.optInt("sdir", 1)));
+            r.searchMax = Math.max(1, Math.min(50, o.optInt("searchMax", 5)));
+            JSONArray ea = o.optJSONArray("extras");
+            if (ea != null) for (int i = 0; i < ea.length(); i++) {
+                JSONObject eo = ea.optJSONObject(i);
+                if (eo != null) r.extras.add(Rule.fromJson(eo));
+            }
             return r;
         }
     }
 
     public int mode = MODE_SEQ;
-    public List<Rule> rules = new ArrayList<>();
+    public List<Rule> rules = new ArrayList<>();   // 場面型の場面／流れ型では「割り込み」
+    public List<Rule> flow = new ArrayList<>();    // 流れ型の手順（上から順番）
     public Rule other = newOther();   // どの場面でもないときの操作
     public int stuckSec = 0;          // どの場面も見つからない状態がこの秒数続いたら止める（0=止めない）
+
+    // テンポのゆらぎ（人の操作に近づける）
+    public int paceMode = 1;   // 待ち時間の散らし方 0=均等 1=人っぽく（短めが多く、たまに長め）
+    public int pauseLevel = 1; // たまに手を止める 0=なし 1=ときどき 2=よく
+    public int breakLevel = 0; // 長めの休憩 0=なし 1=15〜30分ごとに1〜3分 2=30〜60分ごとに3〜8分
+    public int tapHold = 1;    // 押す長さ 0=一定 1=ばらつく
+    public static final String[] PACE_NAMES = {"均等にばらつく", "人っぽく（短めが多く、たまに長め）"};
+    public static final String[] PAUSE_NAMES = {"なし", "ときどき", "よく"};
+    public static final String[] BREAK_NAMES = {"なし", "15〜30分ごと", "30〜60分ごと"};
+    public static final String[] HOLD_NAMES = {"ほぼ一定", "ばらつく"};
 
     private static Rule newOther() {
         Rule r = new Rule();
@@ -276,6 +397,11 @@ public class Scenario {
         o.put("rules", ra);
         o.put("other", other.toJson());
         o.put("stuckSec", stuckSec);
+        o.put("paceMode", paceMode); o.put("pauseLevel", pauseLevel);
+        o.put("breakLevel", breakLevel); o.put("tapHold", tapHold);
+        JSONArray fa = new JSONArray();
+        for (Rule r : flow) fa.put(r.toJson());
+        o.put("flow", fa);
         return o;
     }
 
@@ -298,7 +424,13 @@ public class Scenario {
             JSONObject so = a.optJSONObject(i);
             if (so != null) sc.steps.add(Step.fromJson(so));
         }
-        sc.mode = o.optInt("mode", MODE_SEQ) == MODE_RULES ? MODE_RULES : MODE_SEQ;
+        int md = o.optInt("mode", MODE_SEQ);
+        sc.mode = (md == MODE_RULES || md == MODE_FLOW) ? md : MODE_SEQ;
+        JSONArray fa = o.optJSONArray("flow");
+        if (fa != null) for (int i = 0; i < fa.length(); i++) {
+            JSONObject fo = fa.optJSONObject(i);
+            if (fo != null) sc.flow.add(Rule.fromJson(fo));
+        }
         JSONArray ra = o.optJSONArray("rules");
         if (ra != null) for (int i = 0; i < ra.length(); i++) {
             JSONObject ro = ra.optJSONObject(i);
@@ -312,6 +444,10 @@ public class Scenario {
             sc.other.name = "どの場面でもないとき";
         }
         sc.stuckSec = Math.max(0, o.optInt("stuckSec", 0));
+        sc.paceMode = o.optInt("paceMode", 1) == 0 ? 0 : 1;
+        sc.pauseLevel = Math.max(0, Math.min(2, o.optInt("pauseLevel", 1)));
+        sc.breakLevel = Math.max(0, Math.min(2, o.optInt("breakLevel", 0)));
+        sc.tapHold = o.optInt("tapHold", 1) == 0 ? 0 : 1;
         return sc;
     }
 
@@ -320,6 +456,11 @@ public class Scenario {
         java.util.Set<String> ids = new java.util.HashSet<>();
         for (Step st : steps) if (st.tpl != null) ids.add(st.tpl);
         for (Rule r : rules) if (r.tpl != null) ids.add(r.tpl);
+        for (Rule r : flow) {
+            if (r.tpl != null) ids.add(r.tpl);
+            ids.addAll(r.alts);
+            for (Rule e : r.extras) if (e.tpl != null) ids.add(e.tpl);
+        }
         return ids;
     }
 
@@ -335,6 +476,11 @@ public class Scenario {
     }
 
     public String summary() {
+        if (mode == MODE_FLOW) {
+            String r = repeat == 0 ? "止めるまで" : repeat + "周";
+            return "手順" + flow.size() + "個" + (rules.isEmpty() ? "" : "・割り込み" + rules.size() + "個") + "・" + r
+                    + (maxMinutes > 0 ? "・最大" + maxMinutes + "分" : "");
+        }
         if (mode == MODE_RULES) {
             String r = repeat == 0 ? "止めるまで" : repeat + "周";
             return "場面" + rules.size() + "個・" + r + (maxMinutes > 0 ? "・最大" + maxMinutes + "分" : "");

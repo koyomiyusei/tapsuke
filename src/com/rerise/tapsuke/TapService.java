@@ -86,6 +86,12 @@ public class TapService extends AccessibilityService {
     private int[] fired;
     private int otherFired;
     private float[] bestWhileNone;
+    // 流れ型の実行
+    private int flowIdx;
+    private long flowStepStart;
+    private float flowBest;
+    private int[] flowCount;
+    private int searchCount;
 
     // 記録
     private RecordView recView;
@@ -325,6 +331,17 @@ public class TapService extends AccessibilityService {
 
     private boolean rules() { return sc != null && sc.mode == Scenario.MODE_RULES; }
 
+    private boolean flowMode() { return sc != null && sc.mode == Scenario.MODE_FLOW; }
+
+    /** 画面を見て動く型（場面型・流れ型） */
+    private boolean screenMode() { return rules() || flowMode(); }
+
+    /** いまの型に合った一覧を開く */
+    private void listDialog() {
+        if (flowMode()) flowListDialog();
+        else sceneListDialog();
+    }
+
     private void toast(String s) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
@@ -381,6 +398,7 @@ public class TapService extends AccessibilityService {
         }
         List<Scenario.Rule> all = new ArrayList<>(s.rules);
         all.add(s.other);
+        for (Scenario.Rule fr : s.flow) { all.add(fr); all.addAll(fr.extras); }
         for (Scenario.Rule r : all) {
             r.al = Math.round(r.al * fx); r.ar = Math.round(r.ar * fx);
             r.at = Math.round(r.at * fy); r.ab = Math.round(r.ab * fy);
@@ -432,7 +450,20 @@ public class TapService extends AccessibilityService {
         row.addView(handle);
         row.addView(btnPlay);
 
-        if (rules()) {
+        if (flowMode()) {
+            TextView add = lbtn("＋手順", v -> addFlowMenu());
+            TextView chk = lbtn("確認", v -> checkNow());
+            TextView list = lbtn("手順一覧", v -> flowListDialog());
+            btnEye = lbtn("枠表示", v -> toggleMarkers());
+            TextView close = pbtn("✕", v -> closePanel());
+            row.addView(add);
+            row.addView(chk);
+            row.addView(list);
+            row.addView(btnEye);
+            row.addView(close);
+            btnRec = null;
+            extraButtons = new View[]{add, chk, list, btnEye, close};
+        } else if (rules()) {
             TextView add = lbtn("＋場面", v -> addSceneFlow(-1));
             TextView chk = lbtn("確認", v -> checkNow());
             TextView list = lbtn("場面一覧", v -> sceneListDialog());
@@ -481,7 +512,7 @@ public class TapService extends AccessibilityService {
 
     private void idleStatus() {
         if (sc == null) return;
-        setStatus(sc.name + "・" + (rules() ? "場面" + sc.rules.size() + "個" : sc.steps.size() + "手順"));
+        setStatus(sc.name + "・" + (flowMode() ? "手順" + sc.flow.size() + "個" : rules() ? "場面" + sc.rules.size() + "個" : sc.steps.size() + "手順"));
     }
 
     private void toggleCollapse() {
@@ -514,7 +545,7 @@ public class TapService extends AccessibilityService {
         if (sc == null || playing) return;
         commitMarkers();
         sc.save(this);
-        Class<?> cls = rules() ? RulesActivity.class : EditActivity.class;
+        Class<?> cls = screenMode() ? RulesActivity.class : EditActivity.class;
         startActivity(new Intent(this, cls).putExtra("id", sc.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     }
 
@@ -637,10 +668,23 @@ public class TapService extends AccessibilityService {
             int[] loc = new int[2];
             getLocationOnScreen(loc);
             int[] colors = {0xFF2F80ED, 0xFF27AE60, 0xFFF2994A, 0xFF9B51E0, 0xFFEB5757, 0xFF00B8D9};
-            for (int i = 0; i <= sc.rules.size(); i++) {
-                Scenario.Rule r = i < sc.rules.size() ? sc.rules.get(i) : sc.other;
+            List<Scenario.Rule> items = new ArrayList<>();
+            List<String> names = new ArrayList<>();
+            if (flowMode()) {
+                for (int i = 0; i < sc.flow.size(); i++) {
+                    Scenario.Rule r = sc.flow.get(i);
+                    items.add(r); names.add("手順" + (i + 1));
+                    for (int j = 0; j < r.extras.size(); j++) { items.add(r.extras.get(j)); names.add("手順" + (i + 1) + "の優先" + (j + 1)); }
+                }
+                for (int i = 0; i < sc.rules.size(); i++) { items.add(sc.rules.get(i)); names.add("割り込み" + (i + 1)); }
+            } else {
+                for (int i = 0; i < sc.rules.size(); i++) { items.add(sc.rules.get(i)); names.add((i + 1) + ". " + sc.rules.get(i).name); }
+                items.add(sc.other); names.add("どの場面でもないとき");
+            }
+            for (int i = 0; i < items.size(); i++) {
+                Scenario.Rule r = items.get(i);
                 if (!r.needsArea() || !r.hasArea()) continue;
-                int col = i < sc.rules.size() ? colors[i % colors.length] : 0xFFFFFFFF;
+                int col = colors[i % colors.length];
                 RectF rc = new RectF(r.al - loc[0], r.at - loc[1], r.ar - loc[0], r.ab - loc[1]);
                 p.setStyle(Paint.Style.FILL);
                 p.setColor((col & 0x00FFFFFF) | 0x22000000);
@@ -652,8 +696,7 @@ public class TapService extends AccessibilityService {
                 p.setStyle(Paint.Style.FILL);
                 p.setTextSize(dp(12));
                 p.setFakeBoldText(true);
-                String label = (i < sc.rules.size() ? (i + 1) + ". " + r.name : "どの場面でもないとき")
-                        + "：" + (r.act == Scenario.R_SWIPE_AREA ? "スワイプ" : "タップ");
+                String label = names.get(i) + "：" + (r.act == Scenario.R_SWIPE_AREA ? "スワイプ" : "タップ");
                 float tw = p.measureText(label);
                 p.setColor(0xCC000000);
                 c.drawRect(rc.left, rc.top, rc.left + tw + dp(10), rc.top + dp(20), p);
@@ -672,7 +715,7 @@ public class TapService extends AccessibilityService {
         removeSafe(areaView);
         areaView = null;
         if (sc == null) return;
-        if (rules()) {
+        if (screenMode()) {
             areaView = new AreaView(this);
             int[] sz = screenSize();
             WindowManager.LayoutParams lp = overlayLp(sz[0], sz[1]);
@@ -730,7 +773,7 @@ public class TapService extends AccessibilityService {
     }
 
     private void commitMarkers() {
-        if (sc == null || rules()) return;
+        if (sc == null || screenMode()) return;
         int size = markerSize();
         for (Marker m : markers) {
             if (!m.view.isAttachedToWindow() || m.view.getVisibility() != View.VISIBLE) continue;
@@ -757,7 +800,7 @@ public class TapService extends AccessibilityService {
 
     private boolean usesImages() {
         if (sc == null) return false;
-        if (rules()) return true;
+        if (screenMode()) return true;
         for (Scenario.Step s : sc.steps) if (s.isImage()) return true;
         return false;
     }
@@ -1143,7 +1186,7 @@ public class TapService extends AccessibilityService {
             list.addView(sheetText("まだ場面がありません。下の「＋場面を追加」か、パネルの「＋場面」から追加してください。",
                     14, 0xFFE6E6E6, false, dp(12), dp(8)));
         }
-        for (int i = 0; i < work.size(); i++) list.addView(sceneRow(work.get(i), i, list, sv, work));
+        for (int i = 0; i < work.size(); i++) list.addView(sceneRow(work.get(i), i, list, sv, work, sc.rules));
 
         // どの場面でもないとき（いつも一番下）
         LinearLayout other = new LinearLayout(this);
@@ -1215,7 +1258,29 @@ public class TapService extends AccessibilityService {
 
     /** 一覧の1行：≡（ドラッグで並べ替え）・目印の小さい画像・名前とやること・編集・削除 */
     private View sceneRow(final Scenario.Rule r, int index, final LinearLayout list,
-                          final android.widget.ScrollView sv, final List<Scenario.Rule> work) {
+                          final android.widget.ScrollView sv, final List<Scenario.Rule> work, final List<Scenario.Rule> target) {
+        return dragRow(r, (index + 1) + ". " + r.name,
+                "→ " + r.actLabel() + (r.countLoop ? "・1周と数える" : ""),
+                r.randomLabel() + "\n判定：" + r.levelLabel(),
+                list, sv, work, target,
+                () -> { int i = sc.rules.indexOf(r); if (i >= 0) sceneMenu(i); },
+                () -> confirmDelete(r, target));
+    }
+
+    private void confirmDelete(final Scenario.Rule r, final List<Scenario.Rule> target) {
+        showMenu("「" + r.name + "」を削除しますか？", new String[]{"削除する"}, w -> {
+            target.remove(r);
+            saveAndRefresh();
+            Templates.cleanup(this);
+            listDialog();
+        }, this::listDialog, "やめる");
+    }
+
+    /** 並べ替えできる1行：≡（ドラッグ）・目印の小さい画像・説明・編集・削除 */
+    private View dragRow(final Scenario.Rule r, String title, String line1, String line2,
+                         final LinearLayout list, final android.widget.ScrollView sv,
+                         final List<Scenario.Rule> work, final List<Scenario.Rule> target,
+                         final Runnable onEdit, final Runnable onDelete) {
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -1228,44 +1293,31 @@ public class TapService extends AccessibilityService {
         handle.setTextColor(0xFFBDBDBD);
         handle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
         handle.setGravity(Gravity.CENTER);
-        handle.setMinWidth(dp(44));
+        handle.setMinWidth(dp(40));
         handle.setMinHeight(dp(48));
         row.addView(handle);
 
         android.widget.ImageView iv = new android.widget.ImageView(this);
-        Bitmap bm = Templates.thumb(this, r.tpl);
+        Bitmap bm = r.tpl == null ? null : Templates.thumb(this, r.tpl);
         if (bm != null) iv.setImageBitmap(bm);
         iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(44), dp(44));
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(bm == null ? dp(4) : dp(44), dp(44));
         ip.rightMargin = dp(8);
         row.addView(iv, ip);
 
         LinearLayout txt = new LinearLayout(this);
         txt.setOrientation(LinearLayout.VERTICAL);
-        final TextView name = sheetText((index + 1) + ". " + r.name, 14, Color.WHITE, true, 0, 0);
-        txt.addView(name);
-        txt.addView(sheetText("→ " + r.actLabel() + (r.countLoop ? "・1周と数える" : ""), 12, 0xFFE0E0E0, false, 0, 0));
-        txt.addView(sheetText(r.randomLabel() + "\n判定：" + r.levelLabel(), 11, 0xFF9FB4D0, false, 0, 0));
+        txt.addView(sheetText(title, 14, Color.WHITE, true, 0, 0));
+        txt.addView(sheetText(line1, 12, 0xFFE0E0E0, false, 0, 0));
+        if (line2 != null && !line2.isEmpty()) txt.addView(sheetText(line2, 11, 0xFF9FB4D0, false, 0, 0));
         row.addView(txt, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        row.addView(smallBtn("編集", v -> {
-            int i = sc.rules.indexOf(r);
-            closeMenu();
-            if (i >= 0) sceneMenu(i);
-        }));
-        row.addView(smallBtn("削除", v -> {
-            closeMenu();
-            showMenu("「" + r.name + "」を削除しますか？", new String[]{"削除する"}, w -> {
-                sc.rules.remove(r);
-                saveAndRefresh();
-                Templates.cleanup(this);
-                sceneListDialog();
-            }, this::sceneListDialog, "やめる");
-        }));
+        row.addView(smallBtn("編集", v -> { closeMenu(); onEdit.run(); }));
+        row.addView(smallBtn("削除", v -> { closeMenu(); onDelete.run(); }));
 
         // ドラッグ＆ドロップで並べ替え：≡ はすぐ、行（画像・名前）は長押ししてから掴める
-        handle.setOnTouchListener(new RowDrag(row, list, sv, work, false));
-        RowDrag lp2 = new RowDrag(row, list, sv, work, true);
+        handle.setOnTouchListener(new RowDrag(row, list, sv, work, target, false));
+        RowDrag lp2 = new RowDrag(row, list, sv, work, target, true);
         iv.setOnTouchListener(lp2);
         txt.setOnTouchListener(lp2);
 
@@ -1279,7 +1331,7 @@ public class TapService extends AccessibilityService {
     private class RowDrag implements View.OnTouchListener {
         final LinearLayout row, list;
         final android.widget.ScrollView sv;
-        final List<Scenario.Rule> work;
+        final List<Scenario.Rule> work, target;
         final boolean longPress;
         float startY, shift;
         int pos;
@@ -1288,8 +1340,9 @@ public class TapService extends AccessibilityService {
             public void run() { begin(); }
         };
 
-        RowDrag(LinearLayout row, LinearLayout list, android.widget.ScrollView sv, List<Scenario.Rule> work, boolean longPress) {
-            this.row = row; this.list = list; this.sv = sv; this.work = work; this.longPress = longPress;
+        RowDrag(LinearLayout row, LinearLayout list, android.widget.ScrollView sv, List<Scenario.Rule> work,
+                List<Scenario.Rule> target, boolean longPress) {
+            this.row = row; this.list = list; this.sv = sv; this.work = work; this.target = target; this.longPress = longPress;
         }
 
         void begin() {
@@ -1316,9 +1369,9 @@ public class TapService extends AccessibilityService {
             row.setScaleX(1f);
             row.setScaleY(1f);
             row.setBackground(Ui.round(0xFF3A3D42, dp(12)));
-            if (!work.equals(sc.rules)) {
-                sc.rules.clear();
-                sc.rules.addAll(work);
+            if (!work.equals(target)) {
+                target.clear();
+                target.addAll(work);
                 sc.save(TapService.this);
                 if (areaView != null) areaView.invalidate();
                 renumber(list);
@@ -1399,10 +1452,10 @@ public class TapService extends AccessibilityService {
                     if (s.startsWith("やること")) changeAction(r, false);
                     else if (s.startsWith("目印")) addSceneFlow(i);
                     else if (s.startsWith("操作する範囲")) retakeArea(r);
-                    else if (s.startsWith("優先を上げる")) { if (i > 0) { sc.rules.remove(i); sc.rules.add(i - 1, r); } saveAndRefresh(); sceneListDialog(); }
-                    else if (s.startsWith("優先を下げる")) { if (i < sc.rules.size() - 1) { sc.rules.remove(i); sc.rules.add(i + 1, r); } saveAndRefresh(); sceneListDialog(); }
-                    else { sc.rules.remove(i); saveAndRefresh(); Templates.cleanup(this); sceneListDialog(); }
-        }, this::sceneListDialog, "戻る");
+                    else if (s.startsWith("優先を上げる")) { if (i > 0) { sc.rules.remove(i); sc.rules.add(i - 1, r); } saveAndRefresh(); listDialog(); }
+                    else if (s.startsWith("優先を下げる")) { if (i < sc.rules.size() - 1) { sc.rules.remove(i); sc.rules.add(i + 1, r); } saveAndRefresh(); listDialog(); }
+                    else { sc.rules.remove(i); saveAndRefresh(); Templates.cleanup(this); listDialog(); }
+        }, this::listDialog, "戻る");
     }
 
     private void otherMenu() {
@@ -1424,7 +1477,7 @@ public class TapService extends AccessibilityService {
             r.act = acts[which];
             if (r.needsArea()) retakeArea(r);
             else saveAndRefresh();
-        }, this::sceneListDialog, "戻る");
+        }, this::listDialog, "戻る");
     }
 
     private void saveAndRefresh() {
@@ -1437,6 +1490,7 @@ public class TapService extends AccessibilityService {
     /** 「確認」：いまの画面がどの場面に当てはまるかを、その場で見せる */
     private void checkNow() {
         if (sc == null || playing || busy) return;
+        if (flowMode()) { checkFlowNow(); return; }
         if (sc.rules.isEmpty()) { toast("先に「＋場面」で場面を追加してください"); return; }
         if (Build.VERSION.SDK_INT < 30) { toast("画像を使う機能は Android 11 以上で使えます"); return; }
         busy = true;
@@ -1475,6 +1529,598 @@ public class TapService extends AccessibilityService {
                 showMessage("いまの画面の判定", sb.toString());
             });
         }, 0), 350);
+    }
+
+    // ================= 流れ型：追加と編集 =================
+
+    private void addFlowMenu() {
+        if (sc == null || playing || busy) return;
+        String[] items = {
+                "画像が出たら押す\n　開始・次へ・もう一度などのボタン",
+                "次の画像が出るまで、範囲の中を操作する\n　クエスト中のランダムなスワイプ・タップなど",
+                "割り込み（全体共通・いつ出ても最優先）\n　エラー表示・通信エラーなど"};
+        showMenu("どんな手順を追加しますか？", items, w -> {
+            if (w == 0) addFlowImage(-1);
+            else if (w == 1) addFlowFill();
+            else addSceneFlow(-1);
+        }, null, "やめる");
+    }
+
+    /** 「画像が出たら押す」手順を追加。replaceIndex >= 0 なら、その手順の画像だけ撮り直す */
+    private void addFlowImage(final int replaceIndex) {
+        capture("押すボタンなど、目印になる部分を囲んでください", true, (shot, r) -> {
+            final String id = saveTemplate(shot, r);
+            if (id == null) return;
+            hideCropUi();
+            if (replaceIndex >= 0 && replaceIndex < sc.flow.size()) {
+                sc.flow.get(replaceIndex).tpl = id;
+                endFlow();
+                Templates.cleanup(this);
+                toast("画像を撮り直しました");
+                return;
+            }
+            final Scenario.Rule st = new Scenario.Rule();
+            st.kind = Scenario.K_IMAGE;
+            st.tpl = id;
+            st.name = "手順" + (sc.flow.size() + 1);
+            st.timeoutSec = 60;
+            showMenu("この画像が出たら、どうしますか？", Scenario.IMG_ACT_NAMES, w -> {
+                st.act = Scenario.IMG_ACTS[w];
+                if (st.needsArea()) askArea(st, () -> { sc.flow.add(st); endFlow(); toast("「" + st.name + "」を追加しました"); });
+                else { sc.flow.add(st); endFlow(); toast("「" + st.name + "」を追加しました"); }
+            }, this::cancelFlow, "やめる");
+        });
+    }
+
+    /** 「次の画像が出るまで、範囲の中を操作する」手順を追加 */
+    private void addFlowFill() {
+        showMenu("次の画像が出るまで、何をしますか？", Scenario.FILL_ACT_NAMES, w -> {
+            final Scenario.Rule st = new Scenario.Rule();
+            st.kind = Scenario.K_FILL;
+            st.act = Scenario.FILL_ACTS[w];
+            st.name = "手順" + (sc.flow.size() + 1);
+            st.timeoutSec = 600;
+            st.waitMin = 800;
+            st.waitMax = 1500;
+            if (st.needsArea()) {
+                String title = st.act == Scenario.R_SWIPE_AREA ? "スワイプしてよい範囲を囲んでください" : "タップしてよい範囲を囲んでください";
+                capture(title, true, (shot, r) -> {
+                    st.al = r.left; st.at = r.top; st.ar = r.right; st.ab = r.bottom;
+                    hideCropUi();
+                    if (st.act == Scenario.R_SWIPE_AREA) {
+                        showMenu("スワイプの向き", Scenario.DIR_NAMES, d -> { st.dir = d; sc.flow.add(st); endFlow(); },
+                                () -> { sc.flow.add(st); endFlow(); }, "おまかせ（ランダム）");
+                    } else {
+                        sc.flow.add(st);
+                        endFlow();
+                    }
+                    toast("「" + st.name + "」を追加しました");
+                });
+            } else {
+                sc.flow.add(st);
+                saveAndRefresh();
+                toast("「" + st.name + "」を追加しました");
+            }
+        }, null, "やめる");
+    }
+
+    /** 手順の中の「優先ボタン」を追加（その手順の間に出たら、基本の操作より先に処理） */
+    private void addExtra(final Scenario.Rule step) {
+        capture("優先して押すボタンなどを囲んでください", true, (shot, r) -> {
+            final String id = saveTemplate(shot, r);
+            if (id == null) return;
+            hideCropUi();
+            final Scenario.Rule e = new Scenario.Rule();
+            e.tpl = id;
+            e.name = "優先" + (step.extras.size() + 1);
+            e.waitMin = 800;
+            e.waitMax = 1500;
+            showMenu("このボタンが出たら、どうしますか？", Scenario.Rule.EXTRA_NAMES, w -> {
+                e.applyExtraChoice(w);
+                Runnable done = () -> { step.extras.add(e); endFlow(); stepSheet(step); };
+                if (w == 5) pickJump(e, done);
+                else if (e.needsArea()) askArea(e, done);
+                else done.run();
+            }, this::cancelFlow, "やめる");
+        });
+    }
+
+    /** 一覧に出す「どれくらい待つか・出なかったら」の一言 */
+    private static String timeoutLabel(Scenario.Rule r, boolean hasNextImage) {
+        if (r.kind == Scenario.K_FILL && !hasNextImage) return r.timeoutSec + "秒続けたら次の手順へ";
+        String m = r.timeoutSec >= 60 && r.timeoutSec % 60 == 0 ? (r.timeoutSec / 60) + "分" : r.timeoutSec + "秒";
+        return "最大" + m + "待つ・出なければ" + (r.skipOnTimeout ? "次の手順へ" : "止める");
+    }
+
+    private boolean nextIsImage(int i) {
+        if (sc.flow.size() < 2) return false;
+        return sc.flow.get((i + 1) % sc.flow.size()).kind == Scenario.K_IMAGE;
+    }
+
+    /** 手順一覧（流れ型）：上から順番に進む。下に「割り込み」 */
+    private void flowListDialog() {
+        if (sc == null || playing || busy) return;
+        closeMenu();
+        final int[] sz = screenSize();
+        final List<Scenario.Rule> work = new ArrayList<>(sc.flow);
+        final List<Scenario.Rule> iwork = new ArrayList<>(sc.rules);
+
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.setBackgroundColor(0x99000000);
+        root.setOnClickListener(v -> closeMenu());
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(Ui.round(0xFF2B2D31, dp(18)));
+        card.setPadding(dp(8), dp(14), dp(8), dp(6));
+        card.setOnClickListener(v -> { });
+        card.addView(sheetText("手順一覧（上から順番に進む）", 17, Color.WHITE, true, dp(12), 0));
+        card.addView(sheetText("行を長押し（または ≡）で掴んで並べ替え。最後まで進んだら1に戻り、1周と数えます。「編集」で優先ボタンを追加できます",
+                12, 0xFFBDBDBD, false, dp(12), dp(8)));
+
+        final android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        LinearLayout all = new LinearLayout(this);
+        all.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(all);
+
+        final LinearLayout steps = new LinearLayout(this);
+        steps.setOrientation(LinearLayout.VERTICAL);
+        if (work.isEmpty()) steps.addView(sheetText("まだ手順がありません。下の「＋手順」から追加してください。", 14, 0xFFE6E6E6, false, dp(12), dp(8)));
+        for (int i = 0; i < work.size(); i++) {
+            final Scenario.Rule r = work.get(i);
+            StringBuilder l2 = new StringBuilder(r.randomLabel());
+            l2.append("\n").append(timeoutLabel(r, nextIsImage(i)));
+            if (r.kind == Scenario.K_IMAGE) l2.append("・判定：").append(r.levelLabel());
+            for (int j = 0; j < r.extras.size(); j++)
+                l2.append("\n優先").append(j + 1).append("：").append(r.extras.get(j).name).append(" ").append(r.extras.get(j).extraLabel());
+            steps.addView(dragRow(r, (i + 1) + ". " + r.name, r.flowLabel(), l2.toString(), steps, sv, work, sc.flow,
+                    () -> stepSheet(r), () -> confirmDelete(r, sc.flow)));
+        }
+        all.addView(steps);
+
+        all.addView(sheetText("割り込み（どの手順の途中でも最優先）", 14, Color.WHITE, true, dp(12), dp(4)), Ui.mw(this, 14));
+        final LinearLayout ints = new LinearLayout(this);
+        ints.setOrientation(LinearLayout.VERTICAL);
+        if (iwork.isEmpty()) ints.addView(sheetText("なし（エラー表示などを登録すると、出た瞬間に止めたり閉じたりできます）", 12, 0xFFBDBDBD, false, dp(12), dp(4)));
+        for (int i = 0; i < iwork.size(); i++) {
+            final Scenario.Rule r = iwork.get(i);
+            ints.addView(dragRow(r, (i + 1) + ". " + r.name, "→ " + r.actLabel(), "判定：" + r.levelLabel(), ints, sv, iwork, sc.rules,
+                    () -> { int k = sc.rules.indexOf(r); if (k >= 0) sceneMenu(k); }, () -> confirmDelete(r, sc.rules)));
+        }
+        all.addView(ints);
+        card.addView(sv, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout foot = new LinearLayout(this);
+        foot.setOrientation(LinearLayout.HORIZONTAL);
+        foot.addView(footBtn("＋手順", v -> { closeMenu(); addFlowMenu(); }), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        foot.addView(footBtn("くわしい設定", v -> { closeMenu(); openEditor(); }), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        foot.addView(footBtn("閉じる", v -> closeMenu()), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        card.addView(foot);
+
+        android.widget.FrameLayout.LayoutParams cp = new android.widget.FrameLayout.LayoutParams(
+                Math.min(sz[0] - dp(24), dp(440)), android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        cp.topMargin = dp(50);
+        cp.bottomMargin = dp(50);
+        root.addView(card, cp);
+        menuView = root;
+        addSafe(root, overlayLp(sz[0], sz[1]));
+    }
+
+    /** 1つの手順の中身：基本の操作と、優先ボタン（並べ替え・編集・削除） */
+    private void stepSheet(final Scenario.Rule step) {
+        if (sc == null || playing || busy) return;
+        final int idx = sc.flow.indexOf(step);
+        if (idx < 0) { flowListDialog(); return; }
+        closeMenu();
+        final int[] sz = screenSize();
+        final List<Scenario.Rule> work = new ArrayList<>(step.extras);
+
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.setBackgroundColor(0x99000000);
+        root.setOnClickListener(v -> flowListDialog());
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(Ui.round(0xFF2B2D31, dp(18)));
+        card.setPadding(dp(8), dp(14), dp(8), dp(6));
+        card.setOnClickListener(v -> { });
+        card.addView(sheetText((idx + 1) + ". " + step.name, 17, Color.WHITE, true, dp(12), dp(2)));
+
+        final android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        LinearLayout all = new LinearLayout(this);
+        all.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(all);
+
+        all.addView(sheetText("基本の操作", 13, 0xFFBDBDBD, true, dp(12), dp(2)));
+        all.addView(sheetText(step.flowLabel() + "\n" + step.randomLabel() + "\n" + timeoutLabel(step, nextIsImage(idx)),
+                13, Color.WHITE, false, dp(12), dp(6)));
+        final List<String> acts = new ArrayList<>();
+        acts.add("基本の操作を変える");
+        if (step.kind == Scenario.K_IMAGE) {
+            acts.add("画像を撮り直す");
+            acts.add("目印の画像を追加（どれか1つが出たら押す）");
+            if (!step.alts.isEmpty()) acts.add("追加した画像を消す（" + step.alts.size() + "枚）");
+            acts.add(step.search ? "見つからないときに探す：設定し直す" : "見つからないときにスワイプして探す");
+            if (step.search) acts.add("探すのをやめる");
+        }
+        if (step.needsArea()) acts.add("操作する範囲を決め直す");
+        for (final String a : acts) {
+            TextView b = smallBtn(a, v -> {
+                closeMenu();
+                if (a.startsWith("基本")) changeFlowAction(step);
+                else if (a.startsWith("画像")) addFlowImage(sc.flow.indexOf(step));
+                else if (a.startsWith("目印の画像を追加")) addAltImage(step);
+                else if (a.startsWith("追加した画像を消す")) { step.alts.clear(); saveAndRefresh(); Templates.cleanup(this); stepSheet(step); }
+                else if (a.startsWith("見つからないとき")) setupSearch(step);
+                else if (a.startsWith("探すのをやめる")) { step.search = false; saveAndRefresh(); stepSheet(step); }
+                else retakeArea(step);
+            });
+            b.setGravity(Gravity.START);
+            b.setPadding(dp(12), dp(8), dp(12), dp(8));
+            all.addView(b);
+        }
+
+        all.addView(sheetText("優先ボタン（上ほど優先。見えたら基本の操作より先に処理）", 13, 0xFFBDBDBD, true, dp(12), dp(4)), Ui.mw(this, 12));
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        if (work.isEmpty()) list.addView(sheetText("なし。例：クエスト中に「次へ」が出たら押して次の手順へ、など", 12, 0xFFBDBDBD, false, dp(12), dp(4)));
+        for (int i = 0; i < work.size(); i++) {
+            final Scenario.Rule e = work.get(i);
+            list.addView(dragRow(e, (i + 1) + ". " + e.name, e.extraLabel(), "判定：" + e.levelLabel(), list, sv, work, step.extras,
+                    () -> extraMenu(step, e),
+                    () -> showMenu("「" + e.name + "」を削除しますか？", new String[]{"削除する"}, w -> {
+                        step.extras.remove(e);
+                        saveAndRefresh();
+                        Templates.cleanup(this);
+                        stepSheet(step);
+                    }, () -> stepSheet(step), "やめる")));
+        }
+        all.addView(list);
+        card.addView(sv, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout foot = new LinearLayout(this);
+        foot.setOrientation(LinearLayout.HORIZONTAL);
+        foot.addView(footBtn("＋優先ボタン", v -> { closeMenu(); addExtra(step); }), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        foot.addView(footBtn("一覧へ戻る", v -> flowListDialog()), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        card.addView(foot);
+
+        android.widget.FrameLayout.LayoutParams cp = new android.widget.FrameLayout.LayoutParams(
+                Math.min(sz[0] - dp(24), dp(440)), android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        cp.topMargin = dp(50);
+        cp.bottomMargin = dp(50);
+        root.addView(card, cp);
+        menuView = root;
+        addSafe(root, overlayLp(sz[0], sz[1]));
+    }
+
+    private void changeFlowAction(final Scenario.Rule step) {
+        final boolean img = step.kind == Scenario.K_IMAGE;
+        showMenu(img ? "この画像が出たら、どうしますか？" : "次の画像が出るまで、何をしますか？",
+                img ? Scenario.IMG_ACT_NAMES : Scenario.FILL_ACT_NAMES, w -> {
+                    step.act = img ? Scenario.IMG_ACTS[w] : Scenario.FILL_ACTS[w];
+                    if (step.needsArea() && !step.hasArea()) retakeArea(step);
+                    else { saveAndRefresh(); stepSheet(step); }
+                }, () -> stepSheet(step), "戻る");
+    }
+
+    private void extraMenu(final Scenario.Rule step, final Scenario.Rule e) {
+        final List<String> items = new ArrayList<>();
+        items.add("出たときの動きを変える");
+        items.add("画像を撮り直す");
+        if (e.needsArea()) items.add("タップする範囲を決め直す");
+        showMenu(e.name + "（" + e.extraLabel() + "）", items.toArray(new String[0]), w -> {
+            String s = items.get(w);
+            if (s.startsWith("出たとき")) {
+                showMenu("このボタンが出たら、どうしますか？", Scenario.Rule.EXTRA_NAMES, k -> {
+                    e.applyExtraChoice(k);
+                    if (k == 5) pickJump(e, () -> { saveAndRefresh(); stepSheet(step); });
+                    else if (e.needsArea() && !e.hasArea()) retakeArea(e);
+                    else { saveAndRefresh(); stepSheet(step); }
+                }, () -> stepSheet(step), "戻る");
+            } else if (s.startsWith("画像")) {
+                capture("優先して押すボタンなどを囲んでください", true, (shot, r) -> {
+                    String id = saveTemplate(shot, r);
+                    if (id == null) return;
+                    e.tpl = id;
+                    endFlow();
+                    Templates.cleanup(this);
+                    stepSheet(step);
+                });
+            } else {
+                retakeArea(e);
+            }
+        }, () -> stepSheet(step), "戻る");
+    }
+
+    /** 目印の画像を追加する（どれか1つが出たら、その手順の画像が出たとみなす） */
+    private void addAltImage(final Scenario.Rule step) {
+        capture("追加する目印を囲んでください（例：別のクエストのボタン）", true, (shot, r) -> {
+            String id = saveTemplate(shot, r);
+            if (id == null) return;
+            step.alts.add(id);
+            endFlow();
+            toast("目印を追加しました（" + (step.alts.size() + 1) + "枚のどれか）");
+            stepSheet(step);
+        });
+    }
+
+    /** 見つからないときに探すスワイプの範囲と向き */
+    private void setupSearch(final Scenario.Rule step) {
+        capture("探すときにスワイプする範囲を囲んでください（クエスト一覧など）", true, (shot, r) -> {
+            step.sl = r.left; step.st = r.top; step.sr = r.right; step.sb = r.bottom;
+            hideCropUi();
+            showMenu("どちらへスワイプして探しますか？", new String[]{"上へ（下の方を見る）", "下へ（上の方を見る）", "左へ（右の方を見る）", "右へ（左の方を見る）"}, d -> {
+                step.sdir = d + 1;
+                showMenu("最大で何回スワイプして探しますか？", new String[]{"3回", "5回", "10回", "20回"}, k -> {
+                    step.searchMax = new int[]{3, 5, 10, 20}[k];
+                    step.search = true;
+                    endFlow();
+                    stepSheet(step);
+                }, () -> { step.search = true; endFlow(); stepSheet(step); }, "5回のまま");
+            }, this::cancelFlow, "やめる");
+        });
+    }
+
+    /** 分かれ道：押したあとに進む手順を選ぶ */
+    private void pickJump(final Scenario.Rule e, final Runnable done) {
+        String[] items = new String[sc.flow.size()];
+        for (int i = 0; i < items.length; i++) items[i] = (i + 1) + ". " + sc.flow.get(i).name + "\n　" + sc.flow.get(i).flowLabel();
+        showMenu("押したあと、どの手順へ進みますか？", items, k -> { e.jumpTo = k; done.run(); }, () -> {
+            e.jumpTo = -1;
+            e.advance = true;
+            done.run();
+        }, "次の手順へ（やめる）");
+    }
+
+    /** 実行前の確認。問題があればその説明、なければ null */
+    private String flowProblem() {
+        for (int i = 0; i < sc.flow.size(); i++) {
+            Scenario.Rule r = sc.flow.get(i);
+            if (r.kind == Scenario.K_IMAGE && !Templates.exists(this, r.tpl)) return "手順" + (i + 1) + "の画像がありません。撮り直してください";
+            for (String a : r.alts) if (!Templates.exists(this, a)) return "手順" + (i + 1) + "の追加した画像がありません。消して追加し直してください";
+            if (r.needsArea() && !r.hasArea()) return "手順" + (i + 1) + "の範囲が決まっていません";
+            for (int j = 0; j < r.extras.size(); j++) {
+                Scenario.Rule e = r.extras.get(j);
+                if (!Templates.exists(this, e.tpl)) return "手順" + (i + 1) + "の優先" + (j + 1) + "の画像がありません";
+                if (e.needsArea() && !e.hasArea()) return "手順" + (i + 1) + "の優先" + (j + 1) + "の範囲が決まっていません";
+            }
+        }
+        for (int i = 0; i < sc.rules.size(); i++) {
+            Scenario.Rule r = sc.rules.get(i);
+            if (!Templates.exists(this, r.tpl)) return "割り込み" + (i + 1) + "の画像がありません";
+            if (r.needsArea() && !r.hasArea()) return "割り込み" + (i + 1) + "の範囲が決まっていません";
+        }
+        return null;
+    }
+
+    /** 「確認」（流れ型）：いまの画面が、どの手順・優先ボタン・割り込みに何%当てはまるか */
+    private void checkFlowNow() {
+        if (sc.flow.isEmpty() && sc.rules.isEmpty()) { toast("先に「＋手順」で手順を追加してください"); return; }
+        if (Build.VERSION.SDK_INT < 30) { toast("画像を使う機能は Android 11 以上で使えます"); return; }
+        busy = true;
+        hideOverlays();
+        final List<Scenario.Rule> fl = new ArrayList<>(sc.flow);
+        final List<Scenario.Rule> il = new ArrayList<>(sc.rules);
+        h.postDelayed(() -> shoot((shot, err) -> {
+            final StringBuilder sb = new StringBuilder();
+            if (shot == null) {
+                sb.append(err);
+            } else {
+                try {
+                    Matcher.Frame f = new Matcher.Frame(shot);
+                    if (!il.isEmpty()) sb.append("割り込み\n");
+                    for (int i = 0; i < il.size(); i++) appendScore(sb, f, il.get(i), "　" + (i + 1) + ". ");
+                    for (int i = 0; i < fl.size(); i++) {
+                        Scenario.Rule r = fl.get(i);
+                        sb.append(i == 0 && !il.isEmpty() ? "\n" : "").append("手順").append(i + 1).append(" ").append(r.name);
+                        if (r.kind == Scenario.K_IMAGE) appendScore(sb, f, r, "　");
+                        else sb.append("　（画像なし：次の画像が出るまで操作）\n");
+                        for (int j = 0; j < r.extras.size(); j++) appendScore(sb, f, r.extras.get(j), "　　優先" + (j + 1) + " ");
+                    }
+                    sb.append("\n○＝いまの画面で見つかる　×＝見つからない");
+                } catch (Throwable e) {
+                    App.log(this, e);
+                    sb.append("確認中にエラーが起きました");
+                } finally {
+                    shot.recycle();
+                }
+            }
+            h.post(() -> {
+                busy = false;
+                restoreOverlays();
+                showMessage("いまの画面の判定", sb.toString());
+            });
+        }, 0), 350);
+    }
+
+    private void appendScore(StringBuilder sb, Matcher.Frame f, Scenario.Rule r, String head) {
+        Matcher.Hit hit = findRule(f, r);
+        int pct = hit == null ? 0 : Math.round(hit.score * 100);
+        boolean ok = pct >= r.threshold;
+        sb.append(head.startsWith("手") ? "" : "").append(head).append(r.kind == Scenario.K_IMAGE && head.equals("　") ? "" : r.name + " ")
+                .append(ok ? "○ " : "× ").append(pct).append("%（基準 ").append(r.threshold).append("%）\n");
+    }
+
+    // ================= 流れ型：実行 =================
+
+    private void laterFlow(int ms) {
+        final int tk = token;
+        h.postDelayed(() -> { if (tk == token && playing) flowCycle(); }, withBreak(Math.max(200, ms)));
+    }
+
+    /** 画面を撮って、割り込み → いまの手順の優先ボタン → いまの手順（または次の手順の画像）の順に照合する */
+    private void flowCycle() {
+        if (!playing || sc == null || timeUp()) return;
+        if (sc.flow.isEmpty()) { stopPlay("手順がありません"); return; }
+        if (flowIdx >= sc.flow.size()) flowIdx = 0;
+        final int tk = token;
+        final int idx = flowIdx;
+        final Scenario.Rule cur = sc.flow.get(idx);
+        final Scenario.Rule next = sc.flow.size() > 1 ? sc.flow.get((idx + 1) % sc.flow.size()) : null;
+        final List<Scenario.Rule> ints = new ArrayList<>(sc.rules);
+        final List<Scenario.Rule> extras = new ArrayList<>(cur.extras);
+        shoot((shot, err) -> {
+            if (tk != token) { if (shot != null) shot.recycle(); return; }
+            if (shot == null) {
+                h.post(() -> { if (tk == token) stopPlay(err); });
+                return;
+            }
+            int which = -1;          // 0..=割り込み, 1000..=優先ボタン, 2000=手順の画像
+            Matcher.Hit hit = null;
+            float score = 0;
+            try {
+                Matcher.Frame f = new Matcher.Frame(shot);
+                for (int i = 0; i < ints.size() && which < 0; i++) {
+                    Matcher.Hit hh = findRule(f, ints.get(i));
+                    if (hh != null && hh.score * 100 >= ints.get(i).threshold) { which = i; hit = hh; }
+                }
+                for (int i = 0; i < extras.size() && which < 0; i++) {
+                    Matcher.Hit hh = findRule(f, extras.get(i));
+                    if (hh != null && hh.score * 100 >= extras.get(i).threshold) { which = 1000 + i; hit = hh; }
+                }
+                if (which < 0) {
+                    Scenario.Rule target = cur.kind == Scenario.K_IMAGE ? cur
+                            : (next != null && next.kind == Scenario.K_IMAGE ? next : null);
+                    if (target != null) {
+                        Matcher.Hit hh = findRule(f, target);
+                        if (hh != null) score = hh.score;
+                        if (hh != null && hh.score * 100 >= target.threshold) { which = 2000; hit = hh; }
+                    }
+                }
+            } catch (Throwable e) {
+                App.log(this, e);
+            } finally {
+                shot.recycle(); // 照合が終わったら画面はすぐ捨てる
+            }
+            final int w = which;
+            final Matcher.Hit fh = hit;
+            final float sc2 = score;
+            h.post(() -> { if (tk == token && playing && idx == flowIdx) afterFlow(idx, w, fh, sc2); });
+        }, 0);
+    }
+
+    /** 目印の画像（追加分も含む）のうち、一番よく当てはまったもの */
+    private Matcher.Hit findRule(Matcher.Frame f, Scenario.Rule r) {
+        Matcher.Hit best = null;
+        for (String id : r.allTpls()) {
+            Matcher.Tpl t = Templates.tpl(this, id);
+            Matcher.Hit hh = t == null ? null : Matcher.find(f, t);
+            if (hh != null && (best == null || hh.score > best.score)) best = hh;
+        }
+        return best;
+    }
+
+    private void afterFlow(int idx, int which, Matcher.Hit hit, float score) {
+        final Scenario.Rule cur = sc.flow.get(idx);
+        long now = SystemClock.uptimeMillis();
+        String head = loopCount + "周・" + elapsed() + "｜手順" + (idx + 1) + "/" + sc.flow.size() + " ";
+
+        // 割り込み
+        if (which >= 0 && which < 1000 && which < sc.rules.size()) {
+            final Scenario.Rule r = sc.rules.get(which);
+            if (fired != null && which < fired.length) fired[which]++;
+            setStatus(head + "割り込み：" + r.name);
+            act(r, hit, () -> { flowStepStart = SystemClock.uptimeMillis(); laterFlow(waitOf(r)); });
+            return;
+        }
+        // 優先ボタン
+        if (which >= 1000 && which < 2000 && which - 1000 < cur.extras.size()) {
+            final Scenario.Rule e = cur.extras.get(which - 1000);
+            setStatus(head + "優先：" + e.name);
+            act(e, hit, () -> {
+                if (e.jumpTo >= 0 && e.jumpTo < sc.flow.size()) jumpFlow(e.jumpTo, waitOf(e));
+                else if (e.advance) advanceFlow(waitOf(e));
+                else laterFlow(waitOf(e));
+            });
+            return;
+        }
+        flowBest = Math.max(flowBest, score);
+
+        if (cur.kind == Scenario.K_IMAGE) {
+            if (which == 2000) {
+                flowCount[idx]++;
+                setStatus(head + cur.name + " " + Math.round(hit.score * 100) + "%");
+                act(cur, hit, () -> advanceFlow(waitOf(cur)));
+                return;
+            }
+            if (now - flowStepStart >= cur.timeoutSec * 1000L) { flowTimeout(idx, cur); return; }
+            if (cur.search && cur.hasSearchArea() && searchCount < cur.searchMax
+                    && now - flowStepStart > 1500 + searchCount * 300L) {
+                // 見つからない → 決めた範囲をスワイプして、画面の外にあるものを探す
+                searchCount++;
+                setStatus(head + cur.name + " を探しています（スワイプ " + searchCount + "/" + cur.searchMax + "）");
+                Scenario.Rule sw = new Scenario.Rule();
+                sw.act = Scenario.R_SWIPE_AREA;
+                sw.al = cur.sl; sw.at = cur.st; sw.ar = cur.sr; sw.ab = cur.sb; sw.dir = cur.sdir;
+                swipeIn(sw, () -> laterFlow(700 + rnd.nextInt(600)));
+                return;
+            }
+            setStatus(head + cur.name + " を探しています");
+            laterFlow(300 + rnd.nextInt(200));
+            return;
+        }
+
+        // 次の画像が出るまで操作する手順
+        boolean untilImage = nextIsImage(idx);
+        if (which == 2000) {           // 次の手順の画像が出た → すぐ次へ
+            flowCount[idx]++;
+            advanceFlow(50);
+            return;
+        }
+        if (now - flowStepStart >= cur.timeoutSec * 1000L) {
+            if (!untilImage) { flowCount[idx]++; advanceFlow(50); }
+            else flowTimeout(idx, cur);
+            return;
+        }
+        setStatus(head + cur.name + "（次の画像が出るまで操作）");
+        act(cur, null, () -> laterFlow(waitOf(cur)));
+    }
+
+    /** 次の手順へ。最後まで行ったら1に戻り、1周と数える */
+    private void advanceFlow(int waitMs) {
+        int n = sc.flow.size();
+        int nx = flowIdx + 1;
+        if (nx >= n) {
+            nx = 0;
+            loopCount++;
+            if (sc.repeat > 0 && loopCount >= sc.repeat) {
+                stopPlay("決めた回数に達したので完了しました");
+                return;
+            }
+        }
+        flowIdx = nx;
+        flowStepStart = SystemClock.uptimeMillis() + Math.max(0, waitMs);
+        flowBest = 0;
+        searchCount = 0;
+        laterFlow(waitMs);
+    }
+
+    /** 分かれ道：指定した手順へ進む（1に戻るときは1周と数える） */
+    private void jumpFlow(int to, int waitMs) {
+        if (to <= flowIdx && to == 0) {
+            loopCount++;
+            if (sc.repeat > 0 && loopCount >= sc.repeat) {
+                stopPlay("決めた回数に達したので完了しました");
+                return;
+            }
+        }
+        flowIdx = to;
+        flowStepStart = SystemClock.uptimeMillis() + Math.max(0, waitMs);
+        flowBest = 0;
+        searchCount = 0;
+        laterFlow(waitMs);
+    }
+
+    private void flowTimeout(int idx, Scenario.Rule cur) {
+        String target = cur.kind == Scenario.K_IMAGE ? "手順" + (idx + 1) + "（" + cur.name + "）の画像"
+                : "手順" + (idx + 2 > sc.flow.size() ? 1 : idx + 2) + "の画像";
+        String what = target + "が" + cur.timeoutSec + "秒出ませんでした（最高一致度 " + Math.round(flowBest * 100) + "%）";
+        if (cur.skipOnTimeout) {
+            notFoundSkips++;
+            App.runLog(this, loopCount + "周 " + what + "→次の手順へ");
+            advanceFlow(100);
+        } else {
+            vibrate();
+            stopPlay(what);
+        }
     }
 
     // ================= 順番モード：画像の手順を追加 =================
@@ -1535,7 +2181,11 @@ public class TapService extends AccessibilityService {
             toast("画像を使う機能は Android 11 以上で使えます");
             return;
         }
-        if (rules()) {
+        if (flowMode()) {
+            if (sc.flow.isEmpty()) { toast("先に「＋手順」で手順を追加してください"); return; }
+            String bad = flowProblem();
+            if (bad != null) { toast(bad); return; }
+        } else if (rules()) {
             if (sc.rules.isEmpty()) { toast("先に「＋場面」で場面を追加してください"); return; }
             for (int i = 0; i < sc.rules.size(); i++) {
                 Scenario.Rule r = sc.rules.get(i);
@@ -1562,8 +2212,13 @@ public class TapService extends AccessibilityService {
         noneSince = 0;
         otherFired = 0;
         fired = new int[sc.rules.size()];
+        flowIdx = 0;
+        flowStepStart = SystemClock.uptimeMillis();
+        flowBest = 0;
+        flowCount = new int[sc.flow.size()];
         bestWhileNone = new float[sc.rules.size()];
         playStart = SystemClock.uptimeMillis();
+        scheduleBreak();
         btnPlay.setText("■");
         btnPlay.setTextColor(0xFFFFD166);
         for (View v : extraButtons) v.setVisibility(View.GONE); // 実行中は小さくして、画面の邪魔をしない
@@ -1571,7 +2226,7 @@ public class TapService extends AccessibilityService {
         setStatus("開始します");
         App.runLog(this, "開始「" + sc.name + "」");
         final int tk = token;
-        h.postDelayed(() -> { if (tk == token) { if (rules()) ruleCycle(); else runStep(); } }, 400);
+        h.postDelayed(() -> { if (tk == token) { if (flowMode()) flowCycle(); else if (rules()) ruleCycle(); else runStep(); } }, 400);
     }
 
     private boolean pointUnderPanel() {
@@ -1601,7 +2256,16 @@ public class TapService extends AccessibilityService {
         String done = loopCount + "周・" + elapsed();
         setStatus(sc == null ? "" : done + "で停止");
         StringBuilder log = new StringBuilder("停止 ").append(done);
-        if (rules() && fired != null) {
+        if (flowMode() && flowCount != null) {
+            log.append("・手順").append(flowIdx + 1).append("で停止・回数[");
+            for (int i = 0; i < flowCount.length; i++) log.append(i > 0 ? " " : "").append(i + 1).append(":").append(flowCount[i]);
+            log.append("]");
+            if (fired != null && fired.length > 0) {
+                log.append(" 割り込み[");
+                for (int i = 0; i < fired.length; i++) log.append(i > 0 ? " " : "").append(i + 1).append(":").append(fired[i]);
+                log.append("]");
+            }
+        } else if (rules() && fired != null) {
             log.append("・回数[");
             for (int i = 0; i < fired.length; i++) log.append(i > 0 ? " " : "").append(i + 1).append(":").append(fired[i]);
             log.append(" 他:").append(otherFired).append("]");
@@ -1656,7 +2320,8 @@ public class TapService extends AccessibilityService {
     private void tapAt(float x, float y, Runnable then) {
         Path p = new Path();
         p.moveTo(clampX(x), clampY(y));
-        send(stroke(p, 40 + rnd.nextInt(90)), then);
+        int hold = sc != null && sc.tapHold == 1 ? 30 + (int) Math.round(220 * Math.pow(rnd.nextDouble(), 2)) : 60 + rnd.nextInt(30);
+        send(stroke(p, hold), then);
     }
 
     /** 見つけた画像の内側のどこかをタップ（端は避ける） */
@@ -1670,11 +2335,48 @@ public class TapService extends AccessibilityService {
 
     private void laterRules(int ms) {
         final int tk = token;
-        h.postDelayed(() -> { if (tk == token && playing) ruleCycle(); }, Math.max(250, ms));
+        h.postDelayed(() -> { if (tk == token && playing) ruleCycle(); }, withBreak(Math.max(250, ms)));
     }
 
     private int waitOf(Scenario.Rule r) {
-        return r.waitMax > r.waitMin ? r.waitMin + rnd.nextInt(r.waitMax - r.waitMin + 1) : r.waitMin;
+        return paced(r.waitMin, r.waitMax);
+    }
+
+    /**
+     * 人の操作に近い待ち時間。最短〜最長の中で、
+     *  - 「人っぽく」なら短めが多く、たまに長め（偏った分布）
+     *  - 「たまに手を止める」なら、まれに数秒の間を足す
+     */
+    private int paced(int min, int max) {
+        int base;
+        if (max <= min) base = min;
+        else if (sc != null && sc.paceMode == 1) base = min + (int) Math.round((max - min) * Math.pow(rnd.nextDouble(), 1.8));
+        else base = min + rnd.nextInt(max - min + 1);
+        if (sc != null && sc.pauseLevel > 0) {
+            double p = sc.pauseLevel == 1 ? 0.03 : 0.08;
+            if (rnd.nextDouble() < p) base += sc.pauseLevel == 1 ? 2000 + rnd.nextInt(4000) : 3000 + rnd.nextInt(9000);
+        }
+        return base;
+    }
+
+    private long nextBreakAt;
+
+    private void scheduleBreak() {
+        if (sc == null || sc.breakLevel == 0) { nextBreakAt = Long.MAX_VALUE; return; }
+        long min = sc.breakLevel == 1 ? 15 : 30, max = sc.breakLevel == 1 ? 30 : 60;
+        nextBreakAt = SystemClock.uptimeMillis() + (min + (long) (rnd.nextDouble() * (max - min))) * 60_000L;
+    }
+
+    /** 長めの休憩の時間になっていたら、その分だけ次の操作を遅らせる */
+    private int withBreak(int ms) {
+        if (sc == null || sc.breakLevel == 0 || SystemClock.uptimeMillis() < nextBreakAt) return ms;
+        int dur = sc.breakLevel == 1 ? 60_000 + rnd.nextInt(120_000) : 180_000 + rnd.nextInt(300_000);
+        App.runLog(this, "休憩 " + (dur / 1000) + "秒（" + loopCount + "周・" + elapsed() + "）");
+        setStatus("休憩中（約" + Math.round(dur / 60000.0) + "分）");
+        scheduleBreak();
+        nextBreakAt += dur;
+        flowStepStart += dur + ms; // 休憩中は待ち時間の計測を止める
+        return ms + dur;
     }
 
     /** 画面を見て、当てはまる場面（上から順に最初のもの）の操作をする */
@@ -1816,7 +2518,7 @@ public class TapService extends AccessibilityService {
     // ================= 実行：順番モード =================
 
     private int waitOf(Scenario.Step st) {
-        if (st.afterMax > st.after) return st.after + rnd.nextInt(st.afterMax - st.after + 1);
+        if (st.afterMax > st.after) return paced(st.after, st.afterMax);
         return jitterTime(st.after);
     }
 
@@ -1828,7 +2530,7 @@ public class TapService extends AccessibilityService {
 
     private void later(int ms) {
         final int tk = token;
-        h.postDelayed(() -> { if (tk == token && playing) runStep(); }, Math.max(0, ms));
+        h.postDelayed(() -> { if (tk == token && playing) runStep(); }, withBreak(Math.max(0, ms)));
     }
 
     private void retryImage(final Scenario.Step st, int ms) {

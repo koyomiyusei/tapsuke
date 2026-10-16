@@ -69,6 +69,7 @@ public class EditActivity extends Activity {
         set.addView(Ui.field(this, "位置のズレ（半径。20で約2mm）", jitPx, "px"), Ui.mw(this, 6));
         set.addView(Ui.field(this, "間隔のズレ（20なら±20%）", jitPct, "%"));
         root.addView(Ui.cardView(this, set), Ui.mw(this, 14));
+        root.addView(Ui.paceCard(this, sc), Ui.mw(this, 12));
 
         // 手順
         LinearLayout head = Ui.hbox(this);
